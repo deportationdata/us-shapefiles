@@ -12,4 +12,4 @@ states_sf <-
   st_transform(4326) |>
   arrange(geoid)
 
-sfarrow::st_write_parquet(states_sf, "data/states-sf.parquet")
+st_write_parquet(states_sf, "data/states-sf.parquet")

@@ -102,4 +102,4 @@ places_sf <-
 # and the CB file disagree about the place universe.
 stopifnot(nrow(places_sf) == nrow(places_df))
 
-sfarrow::st_write_parquet(places_sf, "data/places-sf.parquet")
+st_write_parquet(places_sf, "data/places-sf.parquet")
