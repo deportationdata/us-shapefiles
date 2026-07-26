@@ -2,13 +2,10 @@
 
 Reference geography files for the Deportation Data Project: **states**,
 **counties**, and **Census places**, each built as a single sf object —
-attributes and full-resolution geometry together — and published in two
-formats:
-
-| File | Format |
-|---|---|
-| `data/<level>-sf.parquet` | GeoParquet — read with `sfarrow::st_read_parquet()` (R), geopandas, or DuckDB (as WKB, with `enable_geoparquet_conversion` off) |
-| `data/<level>-shp.zip` | zipped Esri shapefile |
+attributes and full-resolution geometry together — and published as
+GeoParquet (`data/<level>-sf.parquet`): read with
+`sfarrow::st_read_parquet()` (R), geopandas, or DuckDB (as WKB, with
+`enable_geoparquet_conversion` off).
 
 ## Levels
 
@@ -39,8 +36,7 @@ apart either; the more populous one is kept.
 
 - `code/` — one build script per level (`states.R`, `counties.R`,
   `places.R`) plus shared helpers (`utils.R`). Run from the repo root:
-  `Rscript code/states.R`. Packages: sf, sfarrow, dplyr, readr, stringr,
-  zip.
+  `Rscript code/states.R`. Packages: sf, sfarrow, dplyr, readr, stringr.
 - `inputs/` — the geocorr2022 / tab20 extracts the county and place
   builds read, copied from `deportationdata/eoir` (`inputs/` there).
   Census cartographic-boundary files download at build time and are not

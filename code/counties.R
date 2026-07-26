@@ -71,4 +71,3 @@ stopifnot(!anyDuplicated(paste(
 )))
 
 sfarrow::st_write_parquet(counties_sf, "data/counties-sf.parquet")
-write_shp_zip(counties_sf, "counties")

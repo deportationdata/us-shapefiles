@@ -1,11 +1,8 @@
 # Shared helpers for the code/*.R build scripts. Each script builds ONE
 # geography as an sf object — attributes and full-resolution geometry
-# together — and publishes it twice:
-#
-#   data/<level>-sf.parquet   GeoParquet, sfarrow::st_write_parquet()
-#                             (sf/sfarrow, geopandas; DuckDB reads it as
-#                             WKB with enable_geoparquet_conversion off)
-#   data/<level>-shp.zip      zipped Esri shapefile, st_write() + zip
+# together — and publishes it as data/<level>-sf.parquet with
+# sfarrow::st_write_parquet() (GeoParquet: sf/sfarrow, geopandas; DuckDB
+# reads it as WKB with enable_geoparquet_conversion off).
 #
 # Conventions every level shares:
 #   - the PRIMARY geometry column is named `geometry`, WGS 84 (EPSG:4326),
@@ -13,8 +10,7 @@
 #     simplify per zoom themselves — nothing here may pre-simplify)
 #   - a level needing a second version of its geometry carries it as an
 #     ADDITIONAL geometry column alongside (e.g. `geometry_point`) — one
-#     file per geography, never a second file (the shapefile export
-#     carries only the primary column; shapefiles are single-geometry)
+#     file per geography, never a second file
 #
 # Scripts run from the repo root:  Rscript code/<level>.R
 
@@ -54,16 +50,4 @@ norm_geo_key <- function(x) {
   x <- iconv(x, from = "UTF-8", to = "ASCII", sub = "")
   x <- chartr("abcdefghijklmnopqrstuvwxyz", "ABCDEFGHIJKLMNOPQRSTUVWXYZ", x)
   gsub("[^A-Z0-9]", "", x)
-}
-
-# Zipped-shapefile twin of each script's st_write_parquet() call: stage
-# the shapefile parts in tempdir() and zip them flat into data/.
-write_shp_zip <- function(x, level) {
-  shp_dir <- file.path(tempdir(), paste0(level, "-shp"))
-  unlink(shp_dir, recursive = TRUE)
-  dir.create(shp_dir)
-  st_write(x, file.path(shp_dir, paste0(level, ".shp")),
-           layer_options = "ENCODING=UTF-8", quiet = TRUE)
-  zip::zip(file.path(normalizePath("data"), paste0(level, "-shp.zip")),
-           files = list.files(shp_dir), root = shp_dir)
 }

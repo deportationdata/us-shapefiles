@@ -103,4 +103,3 @@ places_sf <-
 stopifnot(nrow(places_sf) == nrow(places_df))
 
 sfarrow::st_write_parquet(places_sf, "data/places-sf.parquet")
-write_shp_zip(places_sf, "places")

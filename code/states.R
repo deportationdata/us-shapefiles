@@ -13,4 +13,3 @@ states_sf <-
   arrange(geoid)
 
 sfarrow::st_write_parquet(states_sf, "data/states-sf.parquet")
-write_shp_zip(states_sf, "states")
