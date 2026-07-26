@@ -70,4 +70,4 @@ stopifnot(!anyDuplicated(paste(
   counties_sf$stusps, norm_geo_key(counties_sf$name)
 )))
 
-sfarrow::st_write_parquet(counties_sf, "data/counties-sf.parquet")
+st_write_parquet(counties_sf, "data/counties-sf.parquet")

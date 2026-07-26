@@ -15,6 +15,7 @@
 # Scripts run from the repo root:  Rscript code/<level>.R
 
 library(sf)
+library(sfarrow)
 library(dplyr)
 library(readr)
 library(stringr)
