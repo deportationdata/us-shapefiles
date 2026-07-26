@@ -53,7 +53,7 @@ stopifnot(
 )
 
 counties_sf <-
-  read_cb("cb_2024_us_county_500k", 2024) |>
+  tigris::counties(cb = TRUE, resolution = "500k", year = 2024) |>
   left_join(eoir_county_names, by = c("GEOID" = "geoid")) |>
   mutate(
     # Counties absent from geocorr/tab20 fall back to the same transform

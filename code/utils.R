@@ -21,18 +21,10 @@ library(stringr)
 
 TERRITORY_FIPS <- c("60", "66", "69", "78") # AS, GU, MP, VI
 
-# Census cartographic-boundary shapefile -> sf, download cached in
-# tempdir() so scripts reading the same zip share one fetch per session.
-# `name` is the GENZ basename, e.g. "cb_2024_us_state_500k".
-read_cb <- function(name, year) {
-  url <- sprintf("https://www2.census.gov/geo/tiger/GENZ%d/shp/%s.zip",
-                 year, name)
-  zip <- file.path(tempdir(), basename(url))
-  if (!file.exists(zip)) download.file(url, zip, mode = "wb", quiet = TRUE)
-  shp_dir <- file.path(tempdir(), name)
-  if (!dir.exists(shp_dir)) unzip(zip, exdir = shp_dir)
-  read_sf(shp_dir)
-}
+# The build scripts fetch the Census cartographic-boundary files with
+# tigris::states()/counties()/places(); cache the downloads (tigris'
+# user cache directory) so repeat runs don't re-fetch.
+options(tigris_use_cache = TRUE)
 
 # Geography join-key normalizer — the SAME definition the deportationdata
 # apps apply to data values at runtime, so name-keyed joins against these

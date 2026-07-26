@@ -75,8 +75,10 @@ territory_places <-
     pop20 = 0
   )
 
+# state = NULL fetches the one national CB places file (needs a recent
+# tigris — older versions only fetch places state by state).
 cb_places <-
-  read_cb("cb_2020_us_place_500k", 2020) |>
+  tigris::places(state = NULL, cb = TRUE, year = 2020) |>
   transmute(geoid = GEOID) |>
   st_transform(4326)
 

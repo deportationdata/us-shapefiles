@@ -7,7 +7,7 @@
 source("code/utils.R")
 
 states_sf <-
-  read_cb("cb_2024_us_state_500k", 2024) |>
+  tigris::states(cb = TRUE, resolution = "500k", year = 2024) |>
   transmute(geoid = GEOID, stusps = STUSPS, name = NAME) |>
   st_transform(4326) |>
   arrange(geoid)
