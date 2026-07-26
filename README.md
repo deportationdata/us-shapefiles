@@ -1,6 +1,6 @@
 # us-geography
 
-Reference geography files for deportationdata projects: **states**,
+Reference geography files for the Deportation Data Project: **states**,
 **counties**, and **Census places**, each built as a single sf object —
 attributes and full-resolution geometry together — and published in two
 formats:
