@@ -37,11 +37,14 @@ apart either; the more populous one is kept.
 `data/zip-xwalk.parquet` maps each 2020 Census ZCTA to a county and place —
 `zcta`, `stusps`, `county`, `county_geoid`, `place`, `place_geoid` — no
 geometry. `county_geoid`/`place_geoid` join `counties-sf.parquet` /
-`places-sf.parquet` directly, so this file needs no name normalization.
-Built by `code/zip_xwalk.R`, which replicates the ZCTA allocation in
-`eoir/scripts/geography_join.R` (largest geocorr population share; tab20
-land-area share for the island territories) on the same inputs. A ZCTA
-that geocorr assigns no place has `place`/`place_geoid` as `NA`.
+`places-sf.parquet` directly, so this file needs no name normalization,
+except for the rare `place_geoid` naming a same-named CDP the places
+build's (state, name) dedup dropped for a more populous twin (see
+Naming) — join those by name instead. Built by `code/zip_xwalk.R`, which
+replicates the ZCTA allocation in `eoir/scripts/geography_join.R` (largest
+geocorr population share; tab20 land-area share for the island
+territories) on the same inputs. A ZCTA that geocorr assigns no place has
+`place`/`place_geoid` as `NA`.
 
 ## Layout
 

@@ -8,8 +8,20 @@
 #   AS/GU/MP/VI: tab20 land-area share (geocorr does not cover territories)
 # Unlike geography_join.R's zip_lookup (name-keyed, matching the published
 # EOIR columns), county/place names here are carried only for readability.
+# A handful of place_geoid values point at a same-named CDP places.R's own
+# (state, norm_geo_key(name)) dedup dropped in favor of a more populous
+# twin — join places-sf.parquet by name in that case, same as EOIR data.
 
 source("code/utils.R")
+
+# State FIPS -> stusps, from the same Census cartographic file states.R
+# builds from. Geocorr's CountyName occasionally drops the trailing state
+# abbreviation entirely (e.g. AK's Hoonah-Angoon Census Area), so the FIPS
+# prefix of `county`/GEOID_COUNTY_20 is the reliable state key, not the name.
+state_fips_lookup <-
+  tigris::states(cb = TRUE, resolution = "500k", year = 2024) |>
+  st_drop_geometry() |>
+  transmute(state_fips_code = GEOID, stusps = STUSPS)
 
 # --- ZCTA -> county (population-weighted allocation) ---
 zcta_county <-
@@ -23,11 +35,13 @@ zcta_county <-
   ungroup() |>
   transmute(
     zcta,
-    stusps = str_match(CountyName, ",? ([A-Z]{2})(\\s*\\(.*\\))?$")[, 2],
+    state_fips_code = str_sub(str_pad(county, 5, pad = "0"), 1, 2),
     county_geoid = str_pad(county, 5, pad = "0"),
     county = str_remove(CountyName, ",? [A-Z]{2}(\\s*\\(.*\\))?$") |>
       str_squish()
-  )
+  ) |>
+  left_join(state_fips_lookup, by = "state_fips_code") |>
+  select(-state_fips_code)
 
 # --- ZCTA -> place (population-weighted allocation) ---
 zcta_place <-
@@ -73,15 +87,15 @@ territory_county <-
   ungroup() |>
   transmute(
     zcta = GEOID_ZCTA5_20,
-    stusps = c("60" = "AS", "66" = "GU", "69" = "MP", "78" = "VI")[
-      str_sub(GEOID_COUNTY_20, 1, 2)
-    ],
+    state_fips_code = str_sub(GEOID_COUNTY_20, 1, 2),
     county_geoid = GEOID_COUNTY_20,
     county = str_remove(
       NAMELSAD_COUNTY_20,
       " (County|Borough|Census Area|Municipality|District|Island|Municipio)$"
     )
-  )
+  ) |>
+  left_join(state_fips_lookup, by = "state_fips_code") |>
+  select(-state_fips_code)
 
 territory_place <-
   read_delim("inputs/tab20_zcta520_place20_natl.txt",
@@ -112,7 +126,7 @@ zip_xwalk <-
   arrange(zcta)
 
 # A dup zcta or an NA stusps means an allocation-factor tie broke wrong, or
-# CountyName stopped ending in a plain state abbreviation.
+# a county/state FIPS code fell outside the states.R cartographic file.
 stopifnot(
   !anyDuplicated(zip_xwalk$zcta),
   all(str_detect(zip_xwalk$zcta, "^\\d{5}$")),
