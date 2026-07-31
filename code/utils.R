@@ -30,9 +30,10 @@ options(tigris_use_cache = TRUE)
 # Geography join-key normalizer — the SAME definition the deportationdata
 # apps apply to data values at runtime, so name-keyed joins against these
 # files cannot drift. Deletes non-ASCII bytes outright (not transliterate:
-# the published EOIR data carries U+FFFD where diacritics were corrupted
-# upstream — "A�asco Municipio" — so deleting the diacritic character on
-# both sides is the only transform that matches; iconv //TRANSLIT is also
+# older EOIR vintages carry U+FFFD where diacritics were corrupted by a
+# since-fixed encoding bug upstream — "A�asco Municipio" — so deleting the
+# diacritic character on both sides is the only transform that matches
+# every vintage, corrupted or correctly encoded; iconv //TRANSLIT is also
 # locale-dependent). Then uppercases and strips punctuation/whitespace so
 # title-cased variants ("Baltimore City", "Dekalb", "Debaca") seen in
 # older EOIR vintages still match. chartr, not toupper(): base toupper is
@@ -43,4 +44,14 @@ norm_geo_key <- function(x) {
   x <- iconv(x, from = "UTF-8", to = "ASCII", sub = "")
   x <- chartr("abcdefghijklmnopqrstuvwxyz", "ABCDEFGHIJKLMNOPQRSTUVWXYZ", x)
   gsub("[^A-Z0-9]", "", x)
+}
+
+# Non-ASCII string literals in .R source parse with Encoding() "unknown", not
+# "UTF-8" — in a non-UTF-8 session locale (e.g. a CI runner set to C), `==`
+# against a readr-decoded (Encoding() "UTF-8") string then compares unequal
+# byte-for-byte-identical text. Tag the literal explicitly so encoding-canary
+# comparisons below don't depend on the build machine's locale.
+utf8_literal <- function(x) {
+  Encoding(x) <- "UTF-8"
+  x
 }

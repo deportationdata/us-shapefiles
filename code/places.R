@@ -15,16 +15,17 @@
 # "how prominent is this place" attribute for consumers that need to rank
 # places (e.g. which ones stay visible at national zooms).
 #
-# Names flow straight from the geocorr/tab20 reads to the output — no
-# re-encoding round trip — so the U+FFFD replacement characters some
-# geocorr names deliberately carry (they mirror the published EOIR data's
-# own upstream corruption; see norm_geo_key's note in code/utils.R) stay
-# byte-identical to the data's values.
+# Geocorr CSVs are latin1 (PR place names carry diacritics, e.g. "Mayagüez
+# zona urbana"); the tab20 relationship files are UTF-8 with a BOM, which
+# readr's default UTF-8 read strips. Reading geocorr as UTF-8 doesn't error
+# — readr just substitutes U+FFFD for the invalid bytes — so a wrong
+# locale= here mojibakes names silently instead of failing loudly.
 
 source("code/utils.R")
 
 geocorr_raw <-
   read_csv("inputs/geocorr2022_2607609986_place.csv",
+           locale = locale(encoding = "latin1"),
            show_col_types = FALSE) |>
   slice(-1)
 
@@ -44,6 +45,19 @@ geocorr_places <-
   summarize(pop20 = sum(suppressWarnings(as.numeric(pop20)), na.rm = TRUE),
             .groups = "drop")
 
+# Encoding guard: valid UTF-8 with no U+FFFD (a wrong locale= mojibakes
+# without erroring — see above), plus a canary that at least one PR place
+# still carries its diacritic, since a corrupted-but-valid string (e.g. two
+# mangled bytes forming a different valid character) would pass the U+FFFD
+# check alone.
+stopifnot(
+  "geocorr place names contain non-UTF-8 bytes or U+FFFD — check locale(encoding=) on the read_csv" =
+    all(validUTF8(geocorr_places$name)) &&
+      !any(str_detect(geocorr_places$name, "�")),
+  "no PR place retained its diacritic — encoding regression" =
+    any(geocorr_places$name == utf8_literal("Añasco zona urbana"))
+)
+
 # Each place's TOTAL population — summed over every geocorr row of the
 # geoid, before any name filtering — distinct from geocorr_places$pop20
 # (per name variant), which only ranks the join-key dedup below.
@@ -60,7 +74,6 @@ pop_by_geoid <-
 territory_places <-
   read_delim("inputs/tab20_zcta520_place20_natl.txt",
              delim = "|",
-             locale = locale(encoding = "latin1"),
              show_col_types = FALSE) |>
   filter(str_sub(GEOID_PLACE_20, 1, 2) %in% TERRITORY_FIPS) |>
   distinct(GEOID_PLACE_20, NAMELSAD_PLACE_20) |>
