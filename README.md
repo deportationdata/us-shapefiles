@@ -32,14 +32,25 @@ the deportationdata apps apply at runtime. Where two distinct places
 normalize to the same (state, name) key, the EOIR data cannot tell them
 apart either; the more populous one is kept.
 
+## ZIP crosswalk
+
+`data/zip-xwalk.parquet` maps each 2020 Census ZCTA to a county and place —
+`zcta`, `stusps`, `county`, `county_geoid`, `place`, `place_geoid` — no
+geometry. `county_geoid`/`place_geoid` join `counties-sf.parquet` /
+`places-sf.parquet` directly, so this file needs no name normalization.
+Built by `code/zip_xwalk.R`, which replicates the ZCTA allocation in
+`eoir/scripts/geography_join.R` (largest geocorr population share; tab20
+land-area share for the island territories) on the same inputs. A ZCTA
+that geocorr assigns no place has `place`/`place_geoid` as `NA`.
+
 ## Layout
 
 - `code/` — one build script per level (`states.R`, `counties.R`,
-  `places.R`) plus shared helpers (`utils.R`). Run from the repo root:
-  `Rscript code/states.R`. Packages: sf, sfarrow, tigris, dplyr, readr,
-  stringr.
-- `inputs/` — the geocorr2022 / tab20 extracts the county and place
-  builds read, copied from `deportationdata/eoir` (`inputs/` there).
-  Census cartographic-boundary files download at build time (via tigris,
-  cached) and are not stored.
+  `places.R`), plus the ZIP crosswalk (`zip_xwalk.R`) and shared helpers
+  (`utils.R`). Run from the repo root: `Rscript code/states.R`. Packages:
+  sf, sfarrow, arrow, tigris, dplyr, readr, stringr.
+- `inputs/` — the geocorr2022 / tab20 extracts the county, place, and ZIP
+  crosswalk builds read, copied from `deportationdata/eoir` (`inputs/`
+  there). Census cartographic-boundary files download at build time (via
+  tigris, cached) and are not stored.
 - `data/` — the outputs (Git LFS).
