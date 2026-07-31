@@ -14,8 +14,14 @@
 
 source("code/utils.R")
 
+# Geocorr CSVs are latin1 (PR municipios carry diacritics, e.g. "Añasco
+# Municipio"); the tab20 relationship files are UTF-8 with a BOM, which
+# readr's default UTF-8 read strips. Reading geocorr as UTF-8 doesn't error —
+# readr just substitutes U+FFFD for the invalid bytes — so a wrong locale=
+# here mojibakes names silently instead of failing loudly.
 geocorr_county_names <-
   read_csv("inputs/geocorr2022_2607608761_county.csv",
+           locale = locale(encoding = "latin1"),
            show_col_types = FALSE) |>
   slice(-1) |>
   filter(str_detect(county, "^\\d{5}$")) |>
@@ -30,7 +36,6 @@ geocorr_county_names <-
 territory_county_names <-
   read_delim("inputs/tab20_zcta520_county20_natl.txt",
              delim = "|",
-             locale = locale(encoding = "latin1"),
              show_col_types = FALSE) |>
   filter(str_sub(GEOID_COUNTY_20, 1, 2) %in% TERRITORY_FIPS) |>
   distinct(GEOID_COUNTY_20, NAMELSAD_COUNTY_20) |>
@@ -44,12 +49,17 @@ territory_county_names <-
 
 eoir_county_names <- bind_rows(geocorr_county_names, territory_county_names)
 
-# A vintage that ships latin1 (PR municipios carry diacritics) would pass
-# invalid bytes through and mojibake display names downstream — fail at
-# build time.
+# Encoding guard: valid UTF-8 with no U+FFFD (a wrong locale= mojibakes
+# without erroring — see above), plus a canary that at least one PR
+# municipio still carries its diacritic, since a corrupted-but-valid string
+# (e.g. two mangled bytes forming a different valid character) would pass
+# the U+FFFD check alone.
 stopifnot(
-  "geocorr county names contain non-UTF-8 bytes — set locale(encoding=) on the read_csv" =
-    all(validUTF8(eoir_county_names$name))
+  "geocorr county names contain non-UTF-8 bytes or U+FFFD — check locale(encoding=) on the read_csv" =
+    all(validUTF8(eoir_county_names$name)) &&
+      !any(str_detect(eoir_county_names$name, "�")),
+  "no PR municipio retained its diacritic — encoding regression" =
+    any(eoir_county_names$name == utf8_literal("Añasco Municipio"))
 )
 
 counties_sf <-
