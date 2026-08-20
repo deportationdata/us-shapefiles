@@ -6,8 +6,6 @@
 #   50 states + DC + PR: geocorr's zcta-to-county/place allocation factor
 #     (afact) — largest population share wins ties
 #   AS/GU/MP/VI: tab20 land-area share (geocorr does not cover territories)
-# Unlike geography_join.R's zip_lookup (name-keyed, matching the published
-# EOIR columns), county/place names here are carried only for readability.
 # A handful of place_geoid values point at a same-named CDP places.R's own
 # (state, norm_geo_key(name)) dedup dropped in favor of a more populous
 # twin — join places-sf.parquet by name in that case, same as EOIR data.
@@ -27,9 +25,11 @@ state_fips_lookup <-
 
 # --- ZCTA -> county (population-weighted allocation) ---
 zcta_county <-
-  read_csv("inputs/geocorr2022_2607608761_county.csv",
-           locale = locale(encoding = "latin1"),
-           show_col_types = FALSE) |>
+  read_csv(
+    "inputs/geocorr2022_2607608761_county.csv",
+    locale = locale(encoding = "latin1"),
+    show_col_types = FALSE
+  ) |>
   slice(-1) |>
   type_convert(col_types = cols()) |>
   filter(!is.na(zcta), str_detect(zcta, "^\\d+$")) |>
@@ -48,9 +48,11 @@ zcta_county <-
 
 # --- ZCTA -> place (population-weighted allocation) ---
 zcta_place <-
-  read_csv("inputs/geocorr2022_2607609986_place.csv",
-           locale = locale(encoding = "latin1"),
-           show_col_types = FALSE) |>
+  read_csv(
+    "inputs/geocorr2022_2607609986_place.csv",
+    locale = locale(encoding = "latin1"),
+    show_col_types = FALSE
+  ) |>
   slice(-1) |>
   type_convert(col_types = cols()) |>
   filter(!is.na(zcta), str_detect(zcta, "^\\d+$")) |>
@@ -78,9 +80,11 @@ zcta_place <-
 # Geocorr covers 50 states + DC + PR; territories need the Census
 # relationship files counties.R/places.R also read for their territory rows.
 territory_county <-
-  read_delim("inputs/tab20_zcta520_county20_natl.txt",
-             delim = "|",
-             show_col_types = FALSE) |>
+  read_delim(
+    "inputs/tab20_zcta520_county20_natl.txt",
+    delim = "|",
+    show_col_types = FALSE
+  ) |>
   filter(
     !is.na(GEOID_ZCTA5_20),
     str_sub(GEOID_COUNTY_20, 1, 2) %in% TERRITORY_FIPS
@@ -101,9 +105,11 @@ territory_county <-
   select(-state_fips_code)
 
 territory_place <-
-  read_delim("inputs/tab20_zcta520_place20_natl.txt",
-             delim = "|",
-             show_col_types = FALSE) |>
+  read_delim(
+    "inputs/tab20_zcta520_place20_natl.txt",
+    delim = "|",
+    show_col_types = FALSE
+  ) |>
   filter(
     !is.na(GEOID_ZCTA5_20),
     str_sub(GEOID_PLACE_20, 1, 2) %in% TERRITORY_FIPS
@@ -135,13 +141,15 @@ stopifnot(
   !anyDuplicated(zip_xwalk$zcta),
   all(str_detect(zip_xwalk$zcta, "^\\d{5}$")),
   all(!is.na(zip_xwalk$stusps)),
-  "zip_xwalk names contain non-UTF-8 bytes or U+FFFD — check locale(encoding=) on the read_csv" =
-    all(validUTF8(zip_xwalk$county)) &&
-      !any(str_detect(zip_xwalk$county, "�")) &&
-      all(validUTF8(na.omit(zip_xwalk$place))) &&
-      !any(str_detect(na.omit(zip_xwalk$place), "�")),
-  "no PR municipio retained its diacritic — encoding regression" =
-    any(zip_xwalk$county == utf8_literal("Añasco Municipio"))
+  "zip_xwalk names contain non-UTF-8 bytes or U+FFFD — check locale(encoding=) on the read_csv" = all(validUTF8(
+    zip_xwalk$county
+  )) &&
+    !any(str_detect(zip_xwalk$county, "�")) &&
+    all(validUTF8(na.omit(zip_xwalk$place))) &&
+    !any(str_detect(na.omit(zip_xwalk$place), "�")),
+  "no PR municipio retained its diacritic — encoding regression" = any(
+    zip_xwalk$county == utf8_literal("Añasco Municipio")
+  )
 )
 # 2020 Census has ~33,120 ZCTAs; a big miss means an input didn't load.
 stopifnot(between(n_distinct(zip_xwalk$zcta), 32000, 34000))
