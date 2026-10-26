@@ -1,14 +1,10 @@
 #!/usr/bin/env Rscript
-# Nation (geoid, name + geometry): every state + territory in
-# data/states-sf.parquet dissolved into one feature, so the national
-# outline matches the states file exactly. (The Census CB nation file is
-# published only at 5m/20m — coarser than the 500k the other levels use.)
-# Run after code/states.R.
+# Dissolved from states (the Census nation file is only published at 5m/20m).
 
 source("code/utils.R")
 
 nationwide_sf <-
-  st_read_parquet("data/states-sf.parquet") |>
+  st_read("data/states-sf.parquet", quiet = TRUE) |>
   summarize(geoid = "US", name = "United States")
 
-st_write_parquet(nationwide_sf, "data/nationwide-sf.parquet")
+sf::st_write(nationwide_sf, dsn = "data/nationwide-sf.parquet", driver = "Parquet", layer_options = "USE_PARQUET_GEO_TYPES=ONLY", delete_dsn = file.exists("data/nationwide-sf.parquet"), quiet = TRUE)

@@ -1,8 +1,4 @@
 #!/usr/bin/env Rscript
-# States + territories (geoid, stusps, name + geometry), straight from the
-# Census cartographic boundary file. The 500k series is the one series
-# that carries all 50 states + DC + PR + the island territories, at the
-# finest published resolution.
 
 source("code/utils.R")
 
@@ -12,4 +8,4 @@ states_sf <-
   st_transform(4326) |>
   arrange(geoid)
 
-st_write_parquet(states_sf, "data/states-sf.parquet")
+sf::st_write(states_sf, dsn = "data/states-sf.parquet", driver = "Parquet", layer_options = "USE_PARQUET_GEO_TYPES=ONLY", delete_dsn = file.exists("data/states-sf.parquet"), quiet = TRUE)
