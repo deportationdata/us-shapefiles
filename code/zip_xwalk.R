@@ -1,117 +1,54 @@
 #!/usr/bin/env Rscript
-# ZCTA -> county/place crosswalk (eoir/scripts/geography_join.R): geocorr
-# afact for states + PR, tab20 land area for the island territories.
+# Each 2020 ZCTA → the county and place holding most of its 2020 population
+# (land area in the island territories), from data/blocks-xwalk.parquet.
 
 source("code/utils.R")
 
-# Geocorr's CountyName sometimes omits the state, so key on FIPS.
-state_fips_lookup <-
-  tigris::states(cb = TRUE, resolution = "500k", year = 2024) |>
+counties <-
+  tigris::counties(cb = TRUE, resolution = "500k", year = GEO_VINTAGE) |>
   st_drop_geometry() |>
-  transmute(state_fips_code = GEOID, stusps = STUSPS)
+  transmute(county_geoid = GEOID, stusps = STUSPS,
+            county = county_name(NAMELSAD, STATEFP))
 
-zcta_county <-
-  read_csv(
-    "inputs/geocorr2022_2607608761_county.csv",
-    locale = locale(encoding = "latin1"),
-    show_col_types = FALSE
-  ) |>
-  slice(-1) |>
-  type_convert(col_types = cols()) |>
-  filter(!is.na(zcta), str_detect(zcta, "^\\d+$")) |>
-  group_by(zcta) |>
-  slice_max(afact, n = 1, with_ties = FALSE) |>
-  ungroup() |>
-  transmute(
-    zcta,
-    state_fips_code = str_sub(str_pad(county, 5, pad = "0"), 1, 2),
-    county_geoid = str_pad(county, 5, pad = "0"),
-    county = str_remove(CountyName, ",? [A-Z]{2}(\\s*\\(.*\\))?$") |>
-      str_squish()
-  ) |>
-  left_join(state_fips_lookup, by = "state_fips_code") |>
-  select(-state_fips_code)
+# state = NULL fetches the one national CB places file (needs a recent tigris).
+places <-
+  tigris::places(state = NULL, cb = TRUE, year = GEO_VINTAGE) |>
+  st_drop_geometry() |>
+  transmute(place_geoid = GEOID, place = place_name(NAMELSAD))
 
+# Weight is 2020 population; a ZCTA with none (the territories' blocks carry no
+# POP20) is weighted by land area instead.
+blocks <-
+  arrow::read_parquet("data/blocks-xwalk.parquet") |>
+  filter(!is.na(zcta)) |>
+  mutate(by_pop = sum(pop20, na.rm = TRUE) > 0, .by = zcta) |>
+  mutate(w = if_else(by_pop, coalesce(as.numeric(pop20), 0), aland))
+
+# Largest share of the ZCTA's weight; ties to the lowest code (NA sorts last).
+largest_share <- function(d, geo) {
+  d |>
+    summarise(w = sum(w), .by = c(zcta, {{ geo }})) |>
+    arrange(zcta, desc(w), {{ geo }}) |>
+    distinct(zcta, .keep_all = TRUE) |>
+    select(-w)
+}
+
+zcta_county <- largest_share(blocks, county_geoid)
+
+# Blocks in no place compete state by state, as a "no place" code per state;
+# on land-area ZCTAs only places compete.
 zcta_place <-
-  read_csv(
-    "inputs/geocorr2022_2607609986_place.csv",
-    locale = locale(encoding = "latin1"),
-    show_col_types = FALSE
-  ) |>
-  slice(-1) |>
-  type_convert(col_types = cols()) |>
-  filter(!is.na(zcta), str_detect(zcta, "^\\d+$")) |>
-  group_by(zcta) |>
-  slice_max(afact, n = 1, with_ties = FALSE) |>
-  ungroup() |>
-  transmute(
-    zcta,
-    place_geoid = if_else(
-      place == "99999",
-      NA_character_,
-      paste0(str_pad(state, 2, pad = "0"), place)
-    ),
-    place = if_else(
-      place == "99999",
-      NA_character_,
-      PlaceName |>
-        str_remove(",? [A-Z]{2}$") |>
-        str_remove("\\s*\\(.*\\)") |>
-        str_squish()
-    )
-  )
-
-territory_county <-
-  read_delim(
-    "inputs/tab20_zcta520_county20_natl.txt",
-    delim = "|",
-    show_col_types = FALSE
-  ) |>
-  filter(
-    !is.na(GEOID_ZCTA5_20),
-    str_sub(GEOID_COUNTY_20, 1, 2) %in% TERRITORY_FIPS
-  ) |>
-  group_by(GEOID_ZCTA5_20) |>
-  slice_max(AREALAND_PART, n = 1, with_ties = FALSE) |>
-  ungroup() |>
-  transmute(
-    zcta = GEOID_ZCTA5_20,
-    state_fips_code = str_sub(GEOID_COUNTY_20, 1, 2),
-    county_geoid = GEOID_COUNTY_20,
-    county = str_remove(
-      NAMELSAD_COUNTY_20,
-      " (County|Borough|Census Area|Municipality|District|Island|Municipio)$"
-    )
-  ) |>
-  left_join(state_fips_lookup, by = "state_fips_code") |>
-  select(-state_fips_code)
-
-territory_place <-
-  read_delim(
-    "inputs/tab20_zcta520_place20_natl.txt",
-    delim = "|",
-    show_col_types = FALSE
-  ) |>
-  filter(
-    !is.na(GEOID_ZCTA5_20),
-    str_sub(GEOID_PLACE_20, 1, 2) %in% TERRITORY_FIPS
-  ) |>
-  group_by(GEOID_ZCTA5_20) |>
-  slice_max(AREALAND_PART, n = 1, with_ties = FALSE) |>
-  ungroup() |>
-  transmute(
-    zcta = GEOID_ZCTA5_20,
-    place_geoid = GEOID_PLACE_20,
-    place = NAMELSAD_PLACE_20 |>
-      str_remove("\\s*\\(.*\\)") |>
-      str_squish()
-  )
-
-territory_lookup <- left_join(territory_county, territory_place, by = "zcta")
+  blocks |>
+  filter(by_pop | !is.na(place_geoid)) |>
+  mutate(key = coalesce(place_geoid, str_c(str_sub(county_geoid, 1, 2), "99999"))) |>
+  largest_share(key) |>
+  transmute(zcta, place_geoid = if_else(str_ends(key, "99999"), NA_character_, key))
 
 zip_xwalk <-
-  left_join(zcta_county, zcta_place, by = "zcta") |>
-  bind_rows(territory_lookup) |>
+  zcta_county |>
+  left_join(zcta_place, by = "zcta") |>
+  left_join(counties, by = "county_geoid") |>
+  left_join(places, by = "place_geoid") |>
   transmute(zcta, stusps, county, county_geoid, place, place_geoid) |>
   arrange(zcta)
 
@@ -119,17 +56,18 @@ stopifnot(
   !anyDuplicated(zip_xwalk$zcta),
   all(str_detect(zip_xwalk$zcta, "^\\d{5}$")),
   all(!is.na(zip_xwalk$stusps)),
-  "zip_xwalk names contain non-UTF-8 bytes or U+FFFD — check locale(encoding=) on the read_csv" = all(validUTF8(
-    zip_xwalk$county
-  )) &&
-    !any(str_detect(zip_xwalk$county, "�")) &&
-    all(validUTF8(na.omit(zip_xwalk$place))) &&
-    !any(str_detect(na.omit(zip_xwalk$place), "�")),
-  "no PR municipio retained its diacritic — encoding regression" = any(
-    zip_xwalk$county == utf8_literal("Añasco Municipio")
-  )
+  all(!is.na(zip_xwalk$county)),
+  "a winning place_geoid is missing from the CB places file" =
+    all(!is.na(zip_xwalk$place) | is.na(zip_xwalk$place_geoid)),
+  "zip_xwalk names contain non-UTF-8 bytes or U+FFFD" =
+    all(validUTF8(zip_xwalk$county)) &&
+      !any(str_detect(zip_xwalk$county, "�")) &&
+      all(validUTF8(na.omit(zip_xwalk$place))) &&
+      !any(str_detect(na.omit(zip_xwalk$place), "�")),
+  "no PR municipio retained its diacritic — encoding regression" =
+    any(zip_xwalk$county == utf8_literal("Añasco Municipio"))
 )
-# 2020 has ~33,120 ZCTAs
+# 2020 has ~33,650 ZCTAs
 stopifnot(between(n_distinct(zip_xwalk$zcta), 32000, 34000))
 
 arrow::write_parquet(zip_xwalk, "data/zip-xwalk.parquet")

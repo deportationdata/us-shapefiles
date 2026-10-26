@@ -6,7 +6,7 @@ state_codes <- c(state.abb, "DC", "PR", "GU", "VI", "MP", "AS")
 
 cousubs_sf <-
   map(state_codes, \(s) {
-    tigris::county_subdivisions(state = s, cb = TRUE, year = 2020)
+    tigris::county_subdivisions(state = s, cb = TRUE, year = GEO_VINTAGE)
   }) |>
   bind_rows() |>
   transmute(

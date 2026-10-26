@@ -1,18 +1,12 @@
 #!/usr/bin/env Rscript
-# Each GNIS populated place's cell in the places-cousubs partition. `match`
-# says how it was found:
-#   cell     the point is inside a cell (planar, like the partition build)
-#   tiger    it is off the generalized shoreline but inside the unclipped
-#            TIGER/Line place or county subdivision, mapped to its cell
-#   nearest  TIGER puts it in water (a "subdivision not defined"), and a
-#            cell is within 500 m
-#   NA       outside the US, or in water with no cell nearby
+# Each GNIS populated place's cell in the places-cousubs partition; `match`
+# records how it was found (cell, tiger, nearest, NA): see README.
 
 source("code/utils.R")
 
 nearest_max_m <- 500
 
-# match the planar build of the partition
+# the partition was built planar; join the same way
 sf_use_s2(FALSE)
 
 gnis <- st_read("data/gnis-populated-places-sf.parquet", quiet = TRUE)
@@ -29,8 +23,8 @@ inside <-
   st_join(cell_cols, join = st_within, left = TRUE) |>
   mutate(match = if_else(is.na(cell_geoid), NA_character_, "cell"))
 
-# a point in two cells means the partition overlaps or this join ran with a
-# different geometry engine than the partition was built with: fail, don't pick
+# a point in two cells means the partition overlaps or the geometry engine
+# differs from the build: fail rather than pick
 stopifnot(!anyDuplicated(inside$feature_id))
 
 # first hit per point (a point on a TIGER edge is legitimately in both)
@@ -39,14 +33,16 @@ first_hit <- function(pts, polys, geoid) {
   sapply(h, \(i) if (length(i)) min(geoid[i]) else NA_character_)
 }
 
+# Points off the generalized shoreline: locate them in the unclipped TIGER/Line
+# place or cousub and map that to its cell.
 miss <- inside |> filter(is.na(cell_geoid)) |> select(feature_id, stusps, name)
 tl <- lapply(unique(miss$stusps), \(s) {
   pts <- miss |> filter(stusps == s)
   pl <- tryCatch(
-    tigris::places(s, cb = FALSE, year = 2020, progress_bar = FALSE) |> st_transform(4326),
+    tigris::places(s, cb = FALSE, year = GEO_VINTAGE, progress_bar = FALSE) |> st_transform(4326),
     error = \(e) NULL
   )
-  cs <- tigris::county_subdivisions(s, cb = FALSE, year = 2020, progress_bar = FALSE) |>
+  cs <- tigris::county_subdivisions(s, cb = FALSE, year = GEO_VINTAGE, progress_bar = FALSE) |>
     st_transform(4326)
   st_drop_geometry(pts) |>
     mutate(
@@ -64,6 +60,7 @@ tl <- lapply(unique(miss$stusps), \(s) {
     tl_water = str_sub(tl_cousub, 6, 10) == "00000"
   )
 
+# Points TIGER puts in water: the nearest cell, if within nearest_max_m.
 sf_use_s2(TRUE)
 near <- lapply(split(miss, miss$stusps), \(pts) {
   cs <- cells |> filter(stusps == pts$stusps[1])

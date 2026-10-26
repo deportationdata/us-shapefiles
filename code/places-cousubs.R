@@ -1,20 +1,14 @@
 #!/usr/bin/env Rscript
-# Non-overlapping partition into places and county subdivisions (Census
-# summary level 070 with places kept whole), plus a geoid -> cell crosswalk.
-# Town states: cousubs are cells and places fold into the cousub holding
-# >= fold_share of them. Elsewhere: places are cells (except NY CDPs, which
-# fold like town-state places) plus each cousub's non-sliver remainder; a
-# cousub with no remainder lifts into the place holding >= fold_share of it.
-# Two exceptions make place cells where places would otherwise fold (town
-# states, NY CDPs): a municipality split by a county line (its county pieces
-# merged), and a place that folds into no single cousub (carved out, leaving
-# remainders).
+# Non-overlapping partition of the country into place and county-subdivision
+# cells, plus a geoid → cell crosswalk. The folding rules are commented inline.
 
 source("code/utils.R")
 library(purrr)
 
 sf_use_s2(FALSE)
 
+# Town states: cousubs are the cells and places fold into them. Elsewhere places
+# are cells and cousubs keep their remainders; NY CDPs fold like town-state places.
 town_states <- c("ME", "NH", "VT", "MA", "RI", "CT", "NJ", "PA")
 cdp_fold_states <- c("NY")
 sliver_m2 <- 10000
@@ -22,15 +16,14 @@ sliver_share <- 0.01
 sliver_width_m <- 50
 whole_share <- 0.99999
 fold_share <- 0.95
-# consolidated city-county governments carry one of these LSAD codes; the
-# "(balance)" and "Urban " name tests catch Indianapolis and Urban Honolulu,
-# which carry ordinary ones
+# consolidated city-county LSAD codes; the name tests catch Indianapolis and
+# Urban Honolulu, whose codes are ordinary
 consolidated_lsad <- c("00", "UG", "CG", "MG", "UC")
 consolidated_re <- "\\(balance\\)|^Urban "
 
-# Not data/places-sf.parquet: its same-name dedup drops needed polygons.
+# Not data/places-sf.parquet: its same-name dedup drops polygons needed here.
 places <-
-  tigris::places(state = NULL, cb = TRUE, year = 2020) |>
+  tigris::places(state = NULL, cb = TRUE, year = GEO_VINTAGE) |>
   transmute(
     geoid = GEOID,
     stusps = STUSPS,
@@ -82,6 +75,7 @@ diff_one <- function(g, u) {
   st_sfc(st_union(d), crs = st_crs(g))
 }
 
+# The y feature holding >= fold_share of each x, else NA.
 mostly_one <- function(x, y, y_geoid) {
   hits <- st_intersects(x, y)
   total <- geod_area(x)
@@ -104,7 +98,8 @@ place_cells <-
     !(stusps %in% cdp_fold_states & is_cdp)
   )
 
-# county pieces of one municipality share its place code
+# A municipality split by a county line becomes one place cell: its county
+# pieces share its place code.
 split_pieces <-
   cousubs |>
   as_tibble() |>
@@ -134,6 +129,7 @@ fold_units <- bind_rows(
   merged_cells |> select(geoid, geometry)
 )
 
+# A place that folds into no single cousub becomes a cell, carved out of them.
 folded <- places |> filter(!geoid %in% c(place_cells$geoid, merged_cells$geoid))
 folded_cell <- setNames(
   mostly_one(st_geometry(folded), st_geometry(fold_units), fold_units$geoid),
@@ -142,6 +138,7 @@ folded_cell <- setNames(
 
 place_cells <- bind_rows(place_cells, folded |> filter(is.na(folded_cell[geoid])))
 
+# Each cousub minus its place cells, dropped when the remainder is a sliver.
 remainders <-
   map(unique(cousubs$stusps), \(s) {
     cs <- cousubs |> filter(stusps == s, !geoid %in% split_pieces$geoid)
@@ -204,6 +201,7 @@ place_rows <-
     )
   )
 
+# A cousub with no remainder lifts into the place holding most of it.
 lifted <- cousubs |> filter(!geoid %in% cells$geoid)
 lifted_cell <- setNames(
   mostly_one(st_geometry(lifted), st_geometry(place_cells), place_cells$geoid),

@@ -3,7 +3,7 @@
 source("code/utils.R")
 
 states_sf <-
-  tigris::states(cb = TRUE, resolution = "500k", year = 2024) |>
+  tigris::states(cb = TRUE, resolution = "500k", year = GEO_VINTAGE) |>
   transmute(geoid = GEOID, stusps = STUSPS, name = NAME) |>
   st_transform(4326) |>
   arrange(geoid)

@@ -35,8 +35,8 @@ state_lookup <- c(
 ) |>
   setNames(state_codes)
 
-# GNIS coordinate errors that put a real place at sea, abroad or in the wrong
-# town; each line cites the evidence for the corrected position
+# GNIS coordinate errors that put a place at sea, abroad or in the wrong town;
+# each line cites the evidence for the corrected position
 gnis_fixes <- tibble::tribble(
   ~feature_id, ~lat,        ~long,
   "1389333",   -14.2706462, -170.5695747, # Utumea AS: longitude sign flipped; lands in Utumea East village (55 people, 2020 Census)

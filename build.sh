@@ -6,6 +6,7 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 scripts=(
+  blocks
   states
   counties
   places
