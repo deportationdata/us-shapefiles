@@ -1,12 +1,12 @@
 #!/usr/bin/env Rscript
-# Counties (geoid, stusps, name, geometry) from the GEO_VINTAGE cartographic
+# Counties (geoid, stusps, name, namelsad, geometry) from the GEO_VINTAGE cartographic
 # boundary file; name is NAMELSAD minus " County" (minus any type in the territories).
 
 source("code/utils.R")
 
 counties_sf <-
   tigris::counties(cb = TRUE, resolution = "500k", year = GEO_VINTAGE) |>
-  transmute(geoid = GEOID, stusps = STUSPS, name = county_name(NAMELSAD, STATEFP)) |>
+  transmute(geoid = GEOID, stusps = STUSPS, name = county_name(NAMELSAD, STATEFP), namelsad = NAMELSAD) |>
   st_transform(4326) |>
   arrange(geoid)
 
