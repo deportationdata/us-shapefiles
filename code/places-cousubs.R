@@ -231,10 +231,6 @@ xwalk <-
     cousub_rows |> as_tibble() |> mutate(geo_level = "cousub", is_cdp = FALSE) |>
       select(geoid, geo_level, stusps, name, namelsad, lsad, is_cdp, aland, cell_geoid, rule)
   ) |>
-  left_join(
-    cells |> as_tibble() |> select(cell_geoid = geoid, cell_level = geo_level, cell_namelsad = namelsad),
-    by = "cell_geoid"
-  ) |>
   mutate(
     common_name = if_else(
       geo_level == "place" &
@@ -248,7 +244,44 @@ xwalk <-
     ),
     .after = namelsad
   ) |>
-  select(-lsad) |>
+  select(-lsad)
+
+new_england <- c("ME", "NH", "VT", "MA", "RI", "CT")
+
+cell_common_names <-
+  cells |>
+  st_drop_geometry() |>
+  left_join(
+    xwalk |> filter(geo_level == "place") |> distinct(geoid, place_common_name = common_name),
+    by = "geoid"
+  ) |>
+  mutate(
+    municipality = geo_level == "cousub" &
+      (str_ends(namelsad, " city") | (stusps %in% new_england & str_ends(namelsad, " town"))),
+    plain = str_remove(name, " Town$")
+  ) |>
+  mutate(clash = municipality & sum(municipality) > 1, .by = c(stusps, plain)) |>
+  transmute(
+    geoid,
+    common_name = case_when(
+      geo_level == "place" ~ coalesce(place_common_name, namelsad),
+      municipality & !clash ~ plain,
+      TRUE ~ namelsad
+    )
+  )
+
+cells <-
+  cells |>
+  left_join(cell_common_names, by = "geoid") |>
+  relocate(common_name, .after = namelsad)
+
+xwalk <-
+  xwalk |>
+  left_join(
+    cells |> st_drop_geometry() |>
+      select(cell_geoid = geoid, cell_level = geo_level, cell_namelsad = namelsad, cell_common_name = common_name),
+    by = "cell_geoid"
+  ) |>
   arrange(stusps, geo_level, geoid)
 
 stopifnot(

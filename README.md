@@ -66,8 +66,12 @@ places build and the ZIP crosswalk aggregate this table.
 - `data/places-cousubs-sf.parquet` — a single non-overlapping partition of
   the country into cells built from places and county subdivisions
   (`code/places-cousubs.R`). Columns: geoid,
-  stusps, name, namelsad, geo_level (`place`, `cousub`, `remainder`),
-  county_geoid (NA for place cells). Town-state cells are subdivisions,
+  stusps, name, namelsad, common_name, geo_level (`place`, `cousub`,
+  `remainder`), county_geoid (NA for place cells). `common_name` is the
+  name to show for a cell: a place's `common_name` from the xwalk; a
+  municipality-level subdivision (a `city` anywhere, a `town` in the six
+  New England states) by its plain name, unless two such in the state share
+  it; any other subdivision or remainder by its namelsad. Town-state cells are subdivisions,
   with two kinds of place cell: the 12 PA municipalities split by a county
   line (one cell each), and CDPs that straddle subdivisions (carved out,
   leaving the subdivisions as remainders). Join data to cells through the
@@ -77,7 +81,7 @@ places build and the ZIP crosswalk aggregate this table.
   shared edge can land in two cells or none.
 - `data/places-cousubs-xwalk.parquet` — every place and county
   subdivision geoid with the cell it belongs to (`cell_geoid`, `cell_level`,
-  `cell_namelsad`) and the `rule` that put it there (`merged across county
+  `cell_namelsad`, `cell_common_name`) and the `rule` that put it there (`merged across county
   line` for the county pieces of a split PA municipality); `cell_geoid` is NA
   only for subdivisions covered by several places. `common_name`
   strips the consolidated-government suffixes from place names.
