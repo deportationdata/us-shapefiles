@@ -1,21 +1,21 @@
 #!/usr/bin/env bash
 # Build every data/ file in dependency order, from the repo root:
 #   ./build.sh            everything
-#   ./build.sh cousubs    only the named scripts (code/<name>.R), in the order given
+#   ./build.sh places     only the named scripts (code/<name>.R), in the order given
 set -euo pipefail
 cd "$(dirname "$0")"
 
 scripts=(
-  blocks
   states
   counties
+  blocks
   places
   nationwide
   zip_xwalk
-  cousubs
-  places-cousubs
+  county-subdivisions
+  places-county-subdivisions
   gnis-populated-places
-  gnis-places-cousubs
+  gnis-places-county-subdivisions
 )
 
 if [ "$#" -gt 0 ]; then

@@ -7,4 +7,11 @@ nationwide_sf <-
   st_read("data/states-sf.parquet", quiet = TRUE) |>
   summarize(geoid = "US", name = "United States")
 
-sf::st_write(nationwide_sf, dsn = "data/nationwide-sf.parquet", driver = "Parquet", layer_options = "USE_PARQUET_GEO_TYPES=ONLY", delete_dsn = file.exists("data/nationwide-sf.parquet"), quiet = TRUE)
+sf::st_write(
+  nationwide_sf,
+  dsn = "data/nationwide-sf.parquet",
+  driver = "Parquet",
+  layer_options = "USE_PARQUET_GEO_TYPES=ONLY",
+  delete_dsn = file.exists("data/nationwide-sf.parquet"),
+  quiet = TRUE
+)
