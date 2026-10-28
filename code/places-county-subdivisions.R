@@ -8,7 +8,8 @@
 #   merged cell  a town-state municipality split by a county line, rejoined
 # Steps: merge split municipalities; fold town-state places and NY CDPs, those
 # fitting no single subdivision become cells; cut place cells out of
-# subdivisions, keeping remainders; crosswalk every geoid; short names.
+# subdivisions, keeping remainders; crosswalk every geoid; short names; a
+# county for every cell, from data/blocks-xwalk.parquet for place cells.
 
 source("code/utils.R")
 
@@ -290,6 +291,57 @@ cells <-
   cells |>
   left_join(cell_short_names, by = "geoid") |>
   relocate(short_name, .after = namelsad)
+
+# A place cell's county holds most of its 2020 population (land area where it
+# has none), by the block table; a subdivision cell's is its own. Each block
+# goes to its place's cell, else its subdivision's.
+block_cells <-
+  arrow::read_parquet(
+    "data/blocks-xwalk.parquet",
+    col_select = c("pop20", "aland", "county_geoid", "place_geoid", "county_subdivision_geoid")
+  ) |>
+  left_join(
+    xwalk |>
+      filter(geo_level == "place") |>
+      select(place_geoid = geoid, place_cell = cell_geoid),
+    by = "place_geoid"
+  ) |>
+  left_join(
+    xwalk |>
+      filter(geo_level == "county_subdivision") |>
+      select(county_subdivision_geoid = geoid, subdivision_cell = cell_geoid),
+    by = "county_subdivision_geoid"
+  ) |>
+  transmute(
+    geoid = coalesce(place_cell, subdivision_cell),
+    county_geoid,
+    pop20 = coalesce(pop20, 0L),
+    aland
+  )
+
+place_county <-
+  block_cells |>
+  semi_join(cells |> st_drop_geometry() |> filter(is.na(county_geoid)), by = "geoid") |>
+  summarise(pop = sum(pop20), aland = sum(aland), .by = c(geoid, county_geoid)) |>
+  mutate(
+    county_share = if (sum(pop) > 0) pop / sum(pop) else aland / sum(aland),
+    .by = geoid
+  ) |>
+  slice_max(county_share, n = 1, by = geoid, with_ties = FALSE) |>
+  select(geoid, place_county_geoid = county_geoid, county_share)
+
+cells <-
+  cells |>
+  left_join(place_county, by = "geoid") |>
+  mutate(
+    county_share = if_else(is.na(county_geoid), county_share, 1),
+    county_geoid = coalesce(county_geoid, place_county_geoid)
+  ) |>
+  select(-place_county_geoid) |>
+  relocate(county_share, .after = county_geoid)
+
+# a place cell no block was assigned to (13 tiny CDPs and towns) has no county
+print(count(as_tibble(cells), geo_level, has_county = !is.na(county_geoid)))
 
 xwalk <-
   xwalk |>
