@@ -1,7 +1,6 @@
 #!/usr/bin/env Rscript
 # Every 2020 Census block with POP20 and its geo_vintage county, place, county
-# subdivision and ZCTA, from TIGER/Line TABBLOCK20 and FACES. The FIPS lists
-# come from data/states-sf.parquet and counties-sf.parquet: build those first.
+# subdivision and ZCTA, from TIGER/Line TABBLOCK20 and FACES.
 
 source("code/utils.R")
 library(mirai)
@@ -24,7 +23,7 @@ zip_ok <- function(f) {
 }
 
 # Fetch every url into dir, skipping intact files, with retries. The Census
-# firewall rejects a few bare URLs with an HTML page but passes the same URL
+# firewall rejects a few bare URLs with an HTML page but works on the same URL
 # with a query string, so retries append one.
 fetch_all <- function(urls, dir, tries = 4) {
   dir.create(dir, recursive = TRUE, showWarnings = FALSE)
@@ -69,7 +68,7 @@ blocks <-
       layer <- tools::file_path_sans_ext(basename(z))
       read_sf(
         glue("/vsizip/{z}"),
-        # to save time
+        # to save time subset columns
         query = glue(
           "SELECT GEOID20, POP20, HOUSING20, INTPTLAT20, INTPTLON20, ALAND20 FROM {layer}"
         )
@@ -128,9 +127,9 @@ faces <-
   list_rbind()
 
 # One row per block, geography and code its faces touch. A block split by an
-# annexation goes whole to its largest-area side, ties to the lowest code, NA
+# annexation goes whole to its largest overlap, ties to the lowest code, NA
 # (none) last; stacking the four geographies decides this once.
-sides <-
+overlaps <-
   faces |>
   pivot_longer(
     c(county_geoid, place_geoid, county_subdivision_geoid, zcta),
@@ -142,12 +141,12 @@ sides <-
 
 # Blocks whose faces fall in more than one place (or partly in none).
 place_split <-
-  sides |>
+  overlaps |>
   filter(geography == "place_geoid") |>
   summarise(place_split = n() > 1, .by = geoid)
 
 blocks_xwalk <-
-  sides |>
+  overlaps |>
   slice_head(n = 1, by = c(geoid, geography)) |>
   pivot_wider(id_cols = geoid, names_from = geography, values_from = code) |>
   inner_join(blocks, by = "geoid") |>
@@ -173,7 +172,7 @@ stopifnot(
   nrow(blocks_xwalk) == n_distinct(faces$geoid),
   !anyDuplicated(blocks_xwalk$geoid),
   all(blocks_xwalk$county_geoid %in% county_fips),
-  # every block has a place side in sides, so the place_split join leaves no NA
+  # every block has a place overlap, so the place_split join leaves no NA
   !anyNA(blocks_xwalk$place_split),
   # 2020 ZCTAs are fixed for the decade
   between(n_distinct(na.omit(blocks_xwalk$zcta)), 33000, 34000)

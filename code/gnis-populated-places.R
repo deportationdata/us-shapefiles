@@ -1,6 +1,9 @@
 #!/usr/bin/env Rscript
-# USGS GNIS populated places as points (feature_id, stusps, name, county_name),
-# from the national Domestic Names text file pinned in inputs/.
+# USGS GNIS populated places as points (feature_id, stusps, name, county_name,
+# county_geoid), from the national Domestic Names text file pinned in inputs/.
+# county_geoid is USGS's own county assignment (state_numeric + county_numeric),
+# which places a point on the county line or off the generalized shoreline
+# where a spatial join would not.
 
 source("code/utils.R")
 
@@ -71,13 +74,19 @@ gnis_sf <-
     ),
     delim = "|",
     show_col_types = FALSE,
-    col_types = cols(feature_id = col_character()),
+    col_types = cols(
+      feature_id = col_character(),
+      state_numeric = col_character(),
+      county_numeric = col_character()
+    ),
     col_select = c(
       feature_id,
       feature_name,
       feature_class,
       state_name,
+      state_numeric,
       county_name,
+      county_numeric,
       prim_lat_dec,
       prim_long_dec
     )
@@ -96,16 +105,29 @@ gnis_sf <-
     stusps,
     name = feature_name,
     county_name,
+    # GNIS codes the District of Columbia as county 000
+    county_geoid = if_else(
+      state_numeric == "11",
+      "11001",
+      str_c(state_numeric, county_numeric)
+    ),
     lat = prim_lat_dec,
     long = prim_long_dec
   ) |>
-  # a fix for a feature GNIS has since dropped is ignored
+  # a fix for a feature GNIS has since dropped is ignored so is safe
   rows_update(gnis_fixes, by = "feature_id", unmatched = "ignore") |>
   st_as_sf(coords = c("long", "lat"), crs = 4269) |> # GNIS coordinates are NAD83
   st_transform(4326) |>
   arrange(stusps, name, feature_id)
 
-stopifnot(!anyDuplicated(gnis_sf$feature_id))
+county_geoids <-
+  arrow::read_parquet("data/counties-sf.parquet", col_select = "geoid") |>
+  pull(geoid)
+
+stopifnot(
+  !anyDuplicated(gnis_sf$feature_id),
+  all(gnis_sf$county_geoid %in% county_geoids)
+)
 
 sf::st_write(
   gnis_sf,

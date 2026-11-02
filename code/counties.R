@@ -13,7 +13,7 @@ counties_sf <-
 stopifnot(
   all(validUTF8(counties_sf$name)),
   !any(str_detect(counties_sf$name, "�")),
-  "no PR municipio retained its diacritic — encoding regression" = any(
+  "no PR municipio retained its diacritic — encoding problem" = any(
     counties_sf$name == utf8_literal("Añasco")
   )
 )

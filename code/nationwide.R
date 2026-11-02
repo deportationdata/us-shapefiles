@@ -5,7 +5,7 @@ source("code/utils.R")
 
 nationwide_sf <-
   st_read("data/states-sf.parquet", quiet = TRUE) |>
-  summarize(geoid = "US", name = "United States")
+  summarize(geoid = "US", name = "United States", geometry = st_union(geometry))
 
 sf::st_write(
   nationwide_sf,

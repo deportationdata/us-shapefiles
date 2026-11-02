@@ -1,6 +1,7 @@
 #!/usr/bin/env Rscript
-# Each GNIS populated place's cell in the places-county-subdivisions partition,
-# found in three tiers and recorded in `match`:
+# Each GNIS populated place's county (USGS's own, carried from the points
+# file) and its cell in the places-county-subdivisions partition, found in
+# three tiers and recorded in `match`:
 #   cell     the point is inside a cell
 #   tiger    it is off the generalized shoreline but inside the unclipped
 #            TIGER/Line place or county subdivision, which maps to a cell
@@ -22,6 +23,7 @@ geoid_cell <-
 
 cell_attrs <-
   cells |>
+  st_drop_geometry() |>
   select(
     cell_geoid = geoid,
     cell_stusps = stusps,
@@ -33,11 +35,10 @@ cell_attrs <-
 inside <-
   gnis |>
   select(feature_id, stusps, name) |>
-  st_join(cell_attrs, join = st_within, left = TRUE) |>
+  st_join(cells |> select(cell_geoid = geoid), join = st_within, left = TRUE) |>
   mutate(match = if_else(is.na(cell_geoid), NA_character_, "cell"))
 
-# a point in two cells means the partition overlaps or the geometry engine
-# differs from the build: fail, do not pick
+# a point in two cells means the partition overlaps
 stopifnot(!anyDuplicated(inside$feature_id))
 
 unmatched <-
@@ -46,17 +47,6 @@ unmatched <-
   select(feature_id, stusps, name)
 
 # ---- tier 2: inside the unclipped TIGER/Line place or subdivision -----------
-# a state's TIGER/Line layer
-tiger <- function(fun, state) {
-  fun(
-    pull(state, stusps),
-    cb = FALSE,
-    year = geo_vintage,
-    progress_bar = FALSE
-  ) |>
-    st_transform(4326)
-}
-
 # Each point's TIGER/Line place and subdivision in its state, mapped to their
 # cells; a point on a TIGER edge is in two, take the first. Subdivision code
 # 00000 is TIGER's water placeholder.
@@ -65,11 +55,28 @@ by_tiger <-
   group_by(stusps) |>
   group_modify(\(pts, state) {
     pts |>
-      st_join(tiger(tigris::places, state) |> select(tl_place = GEOID)) |>
+      st_join(
+        tigris::places(
+          pull(state, stusps),
+          cb = FALSE,
+          year = geo_vintage,
+          progress_bar = FALSE
+        ) |>
+          st_transform(4326) |>
+          select(tl_place = GEOID),
+        join = st_intersects
+      ) |>
       slice_min(tl_place, n = 1, by = feature_id, with_ties = FALSE) |>
       st_join(
-        tiger(tigris::county_subdivisions, state) |>
-          select(tl_county_subdivision = GEOID)
+        tigris::county_subdivisions(
+          pull(state, stusps),
+          cb = FALSE,
+          year = geo_vintage,
+          progress_bar = FALSE
+        ) |>
+          st_transform(4326) |>
+          select(tl_county_subdivision = GEOID),
+        join = st_intersects
       ) |>
       slice_min(
         tl_county_subdivision,
@@ -96,12 +103,13 @@ by_tiger <-
   mutate(
     cell_geoid = coalesce(place_cell, county_subdivision_cell),
     match = if_else(is.na(cell_geoid), NA_character_, "tiger"),
-    tl_water = str_sub(tl_county_subdivision, 6, 10) == "00000"
-  ) |>
-  select(-place_cell, -county_subdivision_cell)
+    tl_water = coalesce(str_sub(tl_county_subdivision, 6, 10) == "00000", FALSE)
+  )
 
 # ---- tier 3: nearest cell for points TIGER puts in water --------------------
-water <- unmatched |> semi_join(by_tiger |> filter(tl_water), by = "feature_id")
+water <-
+  unmatched |>
+  semi_join(by_tiger |> filter(is.na(cell_geoid), tl_water), by = "feature_id")
 
 # distances on the sphere, within the point's own state
 sf_use_s2(TRUE)
@@ -127,33 +135,32 @@ nearest <-
   }) |>
   ungroup() |>
   st_as_sf() |>
-  st_drop_geometry()
+  st_drop_geometry() |>
+  mutate(
+    cell_geoid = if_else(dist_m <= nearest_max_m, near_geoid, NA_character_),
+    match = if_else(is.na(cell_geoid), NA_character_, "nearest")
+  )
 sf_use_s2(FALSE)
 
-fallback <-
-  by_tiger |>
-  left_join(nearest, by = c("feature_id", "stusps", "name")) |>
-  mutate(
-    use_nearest = coalesce(
-      is.na(cell_geoid) & tl_water & dist_m <= nearest_max_m,
-      FALSE
-    ),
-    cell_geoid = if_else(use_nearest, near_geoid, cell_geoid),
-    match = if_else(use_nearest, "nearest", match)
-  ) |>
-  select(feature_id, stusps, name, cell_geoid, match) |>
-  left_join(st_drop_geometry(cell_attrs), by = "cell_geoid")
-
+# each tier's matches, plus whatever no tier placed
 xwalk <-
   bind_rows(
     inside |> st_drop_geometry() |> filter(!is.na(cell_geoid)),
-    fallback
+    by_tiger |> filter(!is.na(cell_geoid)),
+    nearest,
+    by_tiger |> filter(is.na(cell_geoid), !tl_water)
   ) |>
   as_tibble() |>
+  left_join(cell_attrs, by = "cell_geoid") |>
+  left_join(
+    gnis |> st_drop_geometry() |> select(feature_id, county_geoid),
+    by = "feature_id"
+  ) |>
   select(
     feature_id,
     stusps,
     name,
+    county_geoid,
     cell_geoid,
     cell_stusps,
     cell_level,
