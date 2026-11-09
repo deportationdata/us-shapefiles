@@ -1,0 +1,91 @@
+name: Build map tiles
+
+# Tiles the polygon levels (code/tiles.R) and uploads to the public
+# Cloudflare R2 bucket, at <DATA_BASE>/<level>.pmtiles. Ubuntu's GDAL has
+# no Parquet driver, so R, sf, GDAL and tippecanoe come prebuilt from
+# conda-forge rather than from renv.lock.
+
+on:
+  workflow_dispatch:
+    inputs:
+      levels:
+        description:
+          "Space-separated levels to build and upload (e.g. just 'cells');
+          empty builds every level in code/tiles.R"
+        required: false
+        default: ""
+  push:
+    branches: [main]
+    paths:
+      - "data/*-sf.parquet"
+      - "code/tiles.R"
+      - ".github/workflows/build-tiles.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-tiles
+  cancel-in-progress: false
+
+jobs:
+  tiles:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash -el {0}
+    env:
+      LEVELS: ${{ inputs.levels }}
+      RENV_CONFIG_AUTOLOADER_ENABLED: "FALSE"
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          lfs: true
+
+      - uses: mamba-org/setup-micromamba@v3
+        with:
+          environment-name: tiles
+          create-args: >-
+            r-base r-sf r-dplyr r-readr r-stringr r-purrr r-glue
+            libgdal-arrow-parquet tippecanoe
+          cache-environment: true
+
+      - name: Build the tile archives
+        run: |
+          set -euo pipefail
+          Rscript code/tiles.R $LEVELS
+          ls -lh tiles/
+
+      - name: Upload to Cloudflare R2
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          AWS_REQUEST_CHECKSUM_CALCULATION: WHEN_REQUIRED
+          AWS_RESPONSE_CHECKSUM_VALIDATION: WHEN_REQUIRED
+        run: |
+          set -euo pipefail
+          endpoint="https://${{ secrets.R2_ACCOUNT_ID }}.r2.cloudflarestorage.com"
+          # Short max-age: a stale cached range of an old archive would
+          # corrupt reads of the new one; the purge below evicts on rebuild
+          for f in tiles/*.pmtiles; do
+            aws s3 cp "$f" "s3://${{ secrets.R2_BUCKET }}/$(basename "$f")" \
+              --endpoint-url "$endpoint" --no-progress \
+              --content-type "application/octet-stream" \
+              --cache-control "public, max-age=86400"
+          done
+
+      - name: Purge Cloudflare CDN cache
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          DATA_BASE: ${{ vars.DUCKDB_DATA_BASE || 'https://app-data.deportationdata.org' }}
+        run: |
+          set -euo pipefail
+          host="${DATA_BASE#*://}"; host="${host%%/*}"
+          zone_id=$(curl -fsS -G "https://api.cloudflare.com/client/v4/zones" \
+            --data-urlencode "name=${host#*.}" \
+            -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" | jq -r '.result[0].id')
+          curl -fsS -X POST "https://api.cloudflare.com/client/v4/zones/${zone_id}/purge_cache" \
+            -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
+            -H "Content-Type: application/json" \
+            --data "$(jq -nc --arg base "$DATA_BASE" '{files: $ARGS.positional | map($base + "/" + .)}' --args $(ls tiles))"
