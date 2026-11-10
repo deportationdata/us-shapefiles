@@ -25,7 +25,12 @@ county_subdivisions_sf <-
   st_transform(4326) |>
   arrange(geoid)
 
-stopifnot(!anyDuplicated(county_subdivisions_sf$geoid))
+stopifnot(
+  !anyNA(county_subdivisions_sf$geoid),
+  !anyDuplicated(county_subdivisions_sf$geoid),
+  !any(st_is_empty(county_subdivisions_sf)),
+  st_crs(county_subdivisions_sf) == st_crs(4326)
+)
 stopifnot(all(state_codes %in% unique(county_subdivisions_sf$stusps)))
 
 sf::st_write(

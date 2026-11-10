@@ -64,6 +64,13 @@ places_sf <-
   select(geoid, stusps, name, namelsad, short_name, lsad, aland, pop20) |>
   arrange(geoid)
 
+stopifnot(
+  !anyNA(places_sf$geoid),
+  !anyDuplicated(places_sf$geoid),
+  !any(st_is_empty(places_sf)),
+  st_crs(places_sf) == st_crs(4326)
+)
+
 sf::st_write(
   places_sf,
   dsn = "data/places-sf.parquet",

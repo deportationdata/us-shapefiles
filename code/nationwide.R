@@ -7,6 +7,11 @@ nationwide_sf <-
   st_read("data/states-sf.parquet", quiet = TRUE) |>
   summarize(geoid = "US", name = "United States", geometry = st_union(geometry))
 
+stopifnot(
+  !any(st_is_empty(nationwide_sf)),
+  st_crs(nationwide_sf) == st_crs(4326)
+)
+
 sf::st_write(
   nationwide_sf,
   dsn = "data/nationwide-sf.parquet",

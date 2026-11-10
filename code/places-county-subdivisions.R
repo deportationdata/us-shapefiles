@@ -33,6 +33,18 @@ sliver_m2 <- 10000
 sliver_share <- 0.01
 sliver_width_m <- 50
 
+# Coverage check, in m2. Dropping slivers leaves holes, so a state may have up
+# to gap_max_m2 uncovered (now 0.48 km2 at most, in TN); cells may overlap or
+# leave their state by overlap_max_m2.
+gap_max_m2 <- 1e6
+overlap_max_m2 <- 100
+
+# Presque Isle Bay (Erie County, PA, 12.4 km2 of water, no land or people) is
+# inside the CB state and county polygons, but the Census puts it in no
+# subdivision (code 00000, "not defined"), which the CB subdivision file
+# leaves out; the cells inherit the hole.
+known_holes_m2 <- c(PA = 12.44e6)
+
 places <-
   st_read("data/places-sf.parquet", quiet = TRUE) |>
   transmute(
@@ -400,9 +412,70 @@ xwalk <-
 
 stopifnot(
   !anyDuplicated(xwalk$geoid),
+  "the xwalk is not every place and subdivision" = setequal(
+    xwalk$geoid,
+    c(places$geoid, county_subdivisions$geoid)
+  ),
   "a cell_geoid names no cell" = all(
     is.na(xwalk$cell_geoid) == is.na(xwalk$cell_level)
+  ),
+  "a cell is no geoid's cell" = all(cells$geoid %in% xwalk$cell_geoid),
+  "a cell is not its own cell" = with(
+    filter(xwalk, geoid %in% cells$geoid),
+    all(cell_geoid == geoid)
+  ),
+  "cell_geoid missing without a 'no cell' rule" = all(
+    is.na(xwalk$cell_geoid) == str_starts(xwalk$rule, "no cell")
   )
+)
+
+stopifnot(
+  !anyNA(cells$geoid),
+  !any(st_is_empty(cells)),
+  all(st_is_valid(cells)),
+  st_crs(cells) == st_crs(4326),
+  "a cell geoid is not a 7-digit place or 10-digit subdivision" = all(
+    nchar(cells$geoid) == if_else(cells$geo_level == "place", 7L, 10L)
+  ),
+  "a cell's county is not in counties-sf" = all(
+    cells$county_geoid %in%
+      c(arrow::read_parquet("data/counties-sf.parquet")$geoid, NA)
+  )
+)
+
+# The cells must tile every state
+states <- st_read("data/states-sf.parquet", quiet = TRUE)
+
+coverage <-
+  cells |>
+  group_by(stusps) |>
+  summarize(
+    cells_m2 = sum(geod_area(geometry)),
+    covered = st_union(geometry)
+  ) |>
+  as_tibble() |>
+  inner_join(
+    states |> as_tibble() |> select(stusps, state = geometry),
+    by = "stusps"
+  ) |>
+  mutate(
+    state_m2 = geod_area(state),
+    covered_m2 = geod_area(covered),
+    gap_m2 = s2::s2_area(s2::s2_difference(st_as_s2(state), st_as_s2(covered))),
+    overlap_m2 = cells_m2 - covered_m2,
+    outside_m2 = covered_m2 - (state_m2 - gap_m2),
+    gap_m2 = gap_m2 - coalesce(known_holes_m2[stusps], 0)
+  ) |>
+  select(-covered, -state)
+
+# the dropped slivers: 1.4 km2 in 14 states
+print(filter(coverage, gap_m2 > overlap_max_m2))
+
+stopifnot(
+  "a state has no cells" = all(state_codes %in% coverage$stusps),
+  "cells leave part of a state uncovered" = all(coverage$gap_m2 <= gap_max_m2),
+  "cells reach outside a state" = all(coverage$outside_m2 <= overlap_max_m2),
+  "cells overlap" = all(abs(coverage$overlap_m2) <= overlap_max_m2)
 )
 
 print(count(as_tibble(cells), geo_level))

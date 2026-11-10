@@ -11,6 +11,10 @@ counties_sf <-
   arrange(geoid)
 
 stopifnot(
+  !anyNA(counties_sf$geoid),
+  !anyDuplicated(counties_sf$geoid),
+  !any(st_is_empty(counties_sf)),
+  st_crs(counties_sf) == st_crs(4326),
   all(validUTF8(counties_sf$name)),
   !any(str_detect(counties_sf$name, "�")),
   "no PR municipio retained its diacritic — encoding problem" = any(

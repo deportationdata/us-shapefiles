@@ -73,6 +73,7 @@ blocks <-
           "SELECT GEOID20, POP20, HOUSING20, INTPTLAT20, INTPTLON20, ALAND20 FROM {layer}"
         )
       ) |>
+        st_drop_geometry() |>
         transmute(
           geoid = GEOID20,
           pop20 = as.integer(POP20),

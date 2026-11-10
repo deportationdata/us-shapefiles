@@ -125,7 +125,10 @@ county_geoids <-
   pull(geoid)
 
 stopifnot(
+  !anyNA(gnis_sf$feature_id),
   !anyDuplicated(gnis_sf$feature_id),
+  !any(st_is_empty(gnis_sf)),
+  st_crs(gnis_sf) == st_crs(4326),
   all(gnis_sf$county_geoid %in% county_geoids)
 )
 

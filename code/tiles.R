@@ -15,6 +15,11 @@ LEVELS <- list(
     cols = c("geoid", "name"),
     maxzoom = 8
   ),
+  countries = list(
+    file = "countries-sf.parquet",
+    cols = c("geoid", "name"),
+    maxzoom = 10
+  ),
   states = list(
     file = "states-sf.parquet",
     cols = c("geoid", "stusps", "name"),
@@ -23,6 +28,21 @@ LEVELS <- list(
   counties = list(
     file = "counties-sf.parquet",
     cols = c("geoid", "stusps", "name"),
+    maxzoom = 10
+  ),
+  cbsas = list(
+    file = "cbsas-sf.parquet",
+    cols = c("geoid", "name", "lsad"),
+    maxzoom = 10
+  ),
+  csas = list(
+    file = "csas-sf.parquet",
+    cols = c("geoid", "name"),
+    maxzoom = 10
+  ),
+  metro_divisions = list(
+    file = "metro-divisions-sf.parquet",
+    cols = c("geoid", "name", "lsad"),
     maxzoom = 10
   ),
   places = list(

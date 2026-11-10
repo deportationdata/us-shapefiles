@@ -8,9 +8,13 @@ cd "$(dirname "$0")"
 scripts=(
   states
   counties
+  cbsas
+  csas
+  metro-divisions
   blocks
   places
   nationwide
+  countries
   zip_xwalk
   county-subdivisions
   places-county-subdivisions

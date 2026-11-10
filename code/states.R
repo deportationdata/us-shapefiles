@@ -10,6 +10,13 @@ states_sf <-
   st_transform(4326) |>
   arrange(geoid)
 
+stopifnot(
+  !anyNA(states_sf$geoid),
+  !anyDuplicated(states_sf$geoid),
+  !any(st_is_empty(states_sf)),
+  st_crs(states_sf) == st_crs(4326)
+)
+
 sf::st_write(
   states_sf,
   dsn = "data/states-sf.parquet",
