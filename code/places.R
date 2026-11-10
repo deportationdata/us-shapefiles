@@ -25,8 +25,8 @@ balance_short_names <- tribble(
   "0947515", "Milford",      # minus Woodmont borough
   "1303440", "Athens",       # minus Winterville and part of Bogart
   "1304204", "Augusta",      # minus Hephzibah and Blythe
-  "1836003", "Indianapolis", # minus Beech Grove, Lawrence, Southport, Speedway
-  "2148006", "Louisville",   # minus 83 cities; holds half of Jefferson County
+  "1836003", "Indianapolis", # minus 4 cities and 11 included towns
+  "2148006", "Louisville Metro (balance)", # minus Louisville city and 83 other cities; holds half of Jefferson County
   "3011397", "Butte",        # minus Walkerville
   "4752006", "Nashville",    # minus Belle Meade, Berry Hill, Forest Hills, Oak
                              # Hill and parts of Goodlettsville and Ridgetop
