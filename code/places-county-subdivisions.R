@@ -2,7 +2,8 @@
 # Non-overlapping partition of the country into cells built from places and
 # county subdivisions, plus a geoid → cell crosswalk.
 #   cell         a place, a county subdivision, or a subdivision's remainder
-#                (what is left once its places are cut out)
+#                (what is left once its places are cut out); in AS, MP and
+#                VI, a county equivalent
 #   fold         assign a place to the subdivision cell holding it
 #   lift         assign a subdivision to the place cell holding it
 #   merged place cell
@@ -23,6 +24,12 @@ sf_use_s2(FALSE)
 town_states <- c("ME", "NH", "VT", "MA", "RI", "CT", "NJ", "PA")
 new_england <- c("ME", "NH", "VT", "MA", "RI", "CT")
 cdp_fold_states <- "NY"
+
+# Island villages are far smaller than mainland cells. In AS, MP and VI the
+# county equivalent is the cell; in Guam, one county equivalent, the
+# municipality is. A place there folds whatever its share.
+county_cell_states <- c("AS", "MP", "VI")
+always_fold_states <- c(county_cell_states, "GU")
 
 # A place folds into a subdivision holding >= fold_share of it; a subdivision
 # keeping >= whole_share after cutting is untouched; a remainder under
@@ -62,6 +69,20 @@ places <-
 
 county_subdivisions <-
   st_read("data/county-subdivisions-sf.parquet", quiet = TRUE) |>
+  st_make_valid()
+
+county_cells <-
+  st_read("data/counties-sf.parquet", quiet = TRUE) |>
+  filter(stusps %in% county_cell_states) |>
+  transmute(
+    geoid,
+    stusps,
+    name,
+    namelsad,
+    geo_level = "county",
+    county_geoid = geoid,
+    geometry
+  ) |>
   st_make_valid()
 
 # Geodesic measures via s2 directly, without toggling sf_use_s2() per call.
@@ -130,19 +151,26 @@ stopifnot(all(
     pull(same)
 ))
 
-unsplit <- county_subdivisions |> anti_join(split_pieces, by = "geoid")
+unsplit <-
+  county_subdivisions |>
+  filter(!stusps %in% county_cell_states) |>
+  anti_join(split_pieces, by = "geoid")
 
 # fold targets: subdivisions, with a split municipality's pieces as one
 fold_units <- bind_rows(
   unsplit |> select(geoid, geometry),
-  merged_place_cells |> select(geoid, geometry)
+  merged_place_cells |> select(geoid, geometry),
+  county_cells |> select(geoid, geometry)
 )
 
 # A town-state place or NY CDP folds into the unit holding >= fold_share of
 # it; one that fits no single unit becomes a cell, carved out of them.
 fold_candidates <-
   places |>
-  filter(stusps %in% town_states | (stusps %in% cdp_fold_states & is_cdp)) |>
+  filter(
+    stusps %in% c(town_states, always_fold_states) |
+      (stusps %in% cdp_fold_states & is_cdp)
+  ) |>
   anti_join(st_drop_geometry(merged_place_cells), by = "geoid")
 
 folded_cell <-
@@ -153,7 +181,7 @@ folded_cell <-
   st_make_valid() |>
   mutate(share = geod_area(geometry) / whole_m2) |>
   st_drop_geometry() |>
-  filter(share >= fold_share_min) |>
+  filter(share >= fold_share_min | stusps %in% always_fold_states) |>
   slice_max(share, n = 1, by = geoid, with_ties = FALSE) |>
   select(geoid, cell_geoid)
 
@@ -177,7 +205,12 @@ subdivision_cells <-
   mutate(full_m2 = geod_area(geometry)) |>
   group_by(stusps) |>
   group_modify(\(cs, state) {
-    st_difference(cs, st_geometry(semi_join(place_union, state, by = "stusps")))
+    state_places <- semi_join(place_union, state, by = "stusps")
+    # Guam has no place cells
+    if (nrow(state_places) == 0) {
+      return(cs)
+    }
+    st_difference(cs, st_geometry(state_places))
   }) |>
   ungroup() |>
   st_as_sf() |>
@@ -204,7 +237,8 @@ cells <-
   bind_rows(
     place_cells |> mutate(geo_level = "place"),
     merged_place_cells,
-    subdivision_cells
+    subdivision_cells,
+    county_cells
   ) |>
   select(geoid, stusps, name, namelsad, geo_level, county_geoid, geometry) |>
   arrange(stusps, geo_level, geoid)
@@ -230,6 +264,7 @@ place_rows <-
     rule = case_when(
       geoid %in% merged_place_cells$geoid ~ "cell: merged across county line",
       cell_geoid == geoid ~ "cell",
+      nchar(cell_geoid) == 5 ~ "folded into county equivalent",
       !is.na(cell_geoid) ~ "folded into subdivision",
       TRUE ~ "no cell: not mostly within one subdivision"
     )
@@ -260,22 +295,36 @@ county_subdivision_rows <-
     cell_geoid = case_when(
       coalesce(is_cell, FALSE) ~ geoid,
       !is.na(merged_geoid) ~ merged_geoid,
+      stusps %in% county_cell_states ~ county_geoid,
       TRUE ~ lifted_geoid
     ),
     rule = case_when(
       cell_geoid == geoid ~ "cell",
       !is.na(merged_geoid) ~ "merged across county line",
+      stusps %in% county_cell_states ~ "folded into county equivalent",
       !is.na(cell_geoid) ~ "lifted into place",
       TRUE ~ "no cell: covered by several places"
     )
   ) |>
   select(-merged_geoid, -lifted_geoid, -is_cell)
 
+# county cells are in the xwalk too, so a 5-digit island geoid finds its cell
+county_rows <-
+  county_cells |>
+  left_join(
+    county_subdivisions |>
+      as_tibble() |>
+      summarise(aland = sum(aland), .by = county_geoid),
+    by = "county_geoid"
+  ) |>
+  mutate(cell_geoid = geoid, rule = "cell", is_cdp = FALSE)
+
 xwalk <-
   bind_rows(
     place_rows |> mutate(geo_level = "place"),
     county_subdivision_rows |>
-      mutate(geo_level = "county_subdivision", is_cdp = FALSE)
+      mutate(geo_level = "county_subdivision", is_cdp = FALSE),
+    county_rows
   ) |>
   st_drop_geometry() |>
   as_tibble() |>
@@ -296,8 +345,8 @@ xwalk <-
 
 # A place cell shows its short_name. A municipality-level subdivision
 # (a town in New England, a city anywhere else) shows its name unless
-# two in the state share it; any other subdivision or remainder shows
-# its namelsad.
+# two in the state share it; any other subdivision or remainder, and a county
+# cell, shows its namelsad.
 cell_short_names <-
   cells |>
   st_drop_geometry() |>
@@ -412,9 +461,9 @@ xwalk <-
 
 stopifnot(
   !anyDuplicated(xwalk$geoid),
-  "the xwalk is not every place and subdivision" = setequal(
+  "the xwalk is not every place, subdivision and county cell" = setequal(
     xwalk$geoid,
-    c(places$geoid, county_subdivisions$geoid)
+    c(places$geoid, county_subdivisions$geoid, county_cells$geoid)
   ),
   "a cell_geoid names no cell" = all(
     is.na(xwalk$cell_geoid) == is.na(xwalk$cell_level)
@@ -426,6 +475,16 @@ stopifnot(
   ),
   "cell_geoid missing without a 'no cell' rule" = all(
     is.na(xwalk$cell_geoid) == str_starts(xwalk$rule, "no cell")
+  ),
+  "an island-territory geoid has no cell" = !anyNA(
+    xwalk$cell_geoid[xwalk$stusps %in% always_fold_states]
+  ),
+  "an island-territory cell is not a county or a Guam municipality" = all(
+    (xwalk$cell_level == if_else(
+      xwalk$stusps == "GU",
+      "county_subdivision",
+      "county"
+    ))[xwalk$stusps %in% always_fold_states]
   )
 )
 
@@ -434,8 +493,13 @@ stopifnot(
   !any(st_is_empty(cells)),
   all(st_is_valid(cells)),
   st_crs(cells) == st_crs(4326),
-  "a cell geoid is not a 7-digit place or 10-digit subdivision" = all(
-    nchar(cells$geoid) == if_else(cells$geo_level == "place", 7L, 10L)
+  "a cell geoid is not a 5-digit county, 7-digit place or 10-digit subdivision" = all(
+    nchar(cells$geoid) ==
+      case_when(
+        cells$geo_level == "county" ~ 5L,
+        cells$geo_level == "place" ~ 7L,
+        TRUE ~ 10L
+      )
   ),
   "a cell's county is not in counties-sf" = all(
     cells$county_geoid %in%
