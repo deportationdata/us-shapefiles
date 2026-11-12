@@ -4,37 +4,45 @@
 #   cell         a place, a county subdivision, or a subdivision's remainder
 #                (what is left once its places are cut out); in AS, MP and
 #                VI, a county equivalent
-#   fold         assign a place to the subdivision cell holding it
+#   fold         assign a place to the subdivision cell holding most of its
+#                2020 residents
 #   lift         assign a subdivision to the place cell holding it
 #   merged place cell
 #                a town-state municipality split by a county line into
 #                subdivisions, rejoined as one place cell
-# Steps: merge split municipalities; fold town-state places and NY CDPs, those
-# fitting no single subdivision become cells; cut place cells out of
-# subdivisions, keeping remainders; crosswalk every geoid; short names; a
-# county for every cell, from data/blocks-xwalk.parquet for place cells.
+# Steps: merge split municipalities; fold town-state places and the CDPs of
+# NY, MI, WI and MN; cut place cells out of subdivisions, keeping remainders;
+# crosswalk every geoid; short names; a county for every cell, from
+# data/blocks-xwalk.parquet for place cells.
 
 source("code/utils.R")
 
 sf_use_s2(FALSE)
 
-# Town states: subdivisions are the cells and places fold into them. All other
-# states: places are cells and subdivisions keep remainders. NY CDPs fold too.
+# The twelve states where the Census Bureau treats towns and townships as
+# general-purpose governments (2020 PL 94-171 technical documentation, App. A,
+# pp. A-21 to A-22). A CDP is never a cell there. Every place folds in
+# town_states; only CDPs fold in cdp_fold_states. Elsewhere every place is a
+# cell.
 # In New England a town is a municipality, which matters for short names.
 town_states <- c("ME", "NH", "VT", "MA", "RI", "CT", "NJ", "PA")
 new_england <- c("ME", "NH", "VT", "MA", "RI", "CT")
-cdp_fold_states <- "NY"
+cdp_fold_states <- c("NY", "MI", "WI", "MN")
+
+# A CDP in unorganized territory has no local government to fold into, so it
+# stays a cell. A CDP on a reservation folds.
+unorganized_lsad <- "46"
 
 # Island villages are far smaller than mainland cells. In AS, MP and VI the
 # county equivalent is the cell; in Guam, one county equivalent, the
-# municipality is. A place there folds whatever its share.
+# municipality is.
 county_cell_states <- c("AS", "MP", "VI")
 always_fold_states <- c(county_cell_states, "GU")
 
-# A place folds into a subdivision holding >= fold_share of it; a subdivision
-# keeping >= whole_share after cutting is untouched; a remainder under
-# sliver_m2, or under sliver_share and narrower than sliver_width_m, is dropped.
-fold_share_min <- 0.95
+# A subdivision lifts if a place holds >= lift_share_min of its area. One that
+# keeps >= whole_share of its area is untouched. A remainder under sliver_m2,
+# or under sliver_share and narrower than sliver_width_m, is dropped.
+lift_share_min <- 0.95
 whole_share <- 0.99999
 sliver_m2 <- 10000
 sliver_share <- 0.01
@@ -84,6 +92,19 @@ county_cells <-
     geometry
   ) |>
   st_make_valid()
+
+blocks <-
+  arrow::read_parquet(
+    "data/blocks-xwalk.parquet",
+    col_select = c(
+      "pop20",
+      "aland",
+      "county_geoid",
+      "place_geoid",
+      "county_subdivision_geoid"
+    )
+  ) |>
+  mutate(pop20 = coalesce(pop20, 0L))
 
 # Geodesic measures via s2 directly, without toggling sf_use_s2() per call.
 geod_area <- function(g) s2::s2_area(st_as_s2(g))
@@ -163,8 +184,8 @@ fold_units <- bind_rows(
   county_cells |> select(geoid, geometry)
 )
 
-# A town-state place or NY CDP folds into the unit holding >= fold_share of
-# it; one that fits no single unit becomes a cell, carved out of them.
+# A candidate folds into the unit with most of its 2020 residents, or most of
+# its area if it has no residents.
 fold_candidates <-
   places |>
   filter(
@@ -173,16 +194,64 @@ fold_candidates <-
   ) |>
   anti_join(st_drop_geometry(merged_place_cells), by = "geoid")
 
-folded_cell <-
+fold_area <-
   fold_candidates |>
   mutate(whole_m2 = geod_area(geometry)) |>
   st_intersection(fold_units |> select(cell_geoid = geoid)) |>
   suppressWarnings() |>
   st_make_valid() |>
-  mutate(share = geod_area(geometry) / whole_m2) |>
+  mutate(area_share = geod_area(geometry) / whole_m2) |>
   st_drop_geometry() |>
-  filter(share >= fold_share_min | stusps %in% always_fold_states) |>
-  slice_max(share, n = 1, by = geoid, with_ties = FALSE) |>
+  select(geoid, cell_geoid, area_share)
+
+# Blocks in no defined subdivision (code 00000) are left out.
+fold_pop <-
+  blocks |>
+  semi_join(st_drop_geometry(fold_candidates), by = c("place_geoid" = "geoid")) |>
+  left_join(
+    county_subdivisions |>
+      as_tibble() |>
+      left_join(split_pieces, by = "geoid") |>
+      transmute(
+        county_subdivision_geoid = geoid,
+        cell_geoid = case_when(
+          !is.na(merged_geoid) ~ merged_geoid,
+          stusps %in% county_cell_states ~ county_geoid,
+          TRUE ~ geoid
+        )
+      ),
+    by = "county_subdivision_geoid"
+  ) |>
+  filter(!is.na(cell_geoid)) |>
+  summarise(pop = sum(pop20), .by = c(place_geoid, cell_geoid)) |>
+  rename(geoid = place_geoid)
+
+# Pick by most residents, then most area, then lowest geoid.
+fold_choice <-
+  full_join(fold_area, fold_pop, by = c("geoid", "cell_geoid")) |>
+  mutate(pop = coalesce(pop, 0L), area_share = coalesce(area_share, 0)) |>
+  arrange(geoid, desc(pop), desc(area_share), cell_geoid) |>
+  slice_head(n = 1, by = geoid) |>
+  left_join(
+    county_subdivisions |> as_tibble() |> select(cell_geoid = geoid, lsad),
+    by = "cell_geoid"
+  ) |>
+  left_join(
+    fold_candidates |> st_drop_geometry() |> select(geoid, stusps, is_cdp),
+    by = "geoid"
+  )
+
+unorganized_cdps <-
+  fold_choice |>
+  filter(
+    is_cdp,
+    lsad %in% unorganized_lsad,
+    !stusps %in% always_fold_states
+  )
+
+folded_cell <-
+  fold_choice |>
+  anti_join(unorganized_cdps, by = "geoid") |>
   select(geoid, cell_geoid)
 
 # every place that neither merged nor folded is a cell
@@ -266,24 +335,38 @@ place_rows <-
       cell_geoid == geoid ~ "cell",
       nchar(cell_geoid) == 5 ~ "folded into county equivalent",
       !is.na(cell_geoid) ~ "folded into subdivision",
-      TRUE ~ "no cell: not mostly within one subdivision"
+      TRUE ~ "no cell: its subdivision is covered by places"
     )
   ) |>
   select(-folded_geoid, -is_cell)
 
-# A county subdivision with no remainder lifts into the place holding most of it
-# (split pieces already have their merged place cell).
-lifted_cell <-
+# A county subdivision with no remainder lifts into a place cell, picked by
+# residents, then area, then geoid. Split pieces already have their merged
+# place cell.
+lift_area <-
   unsplit |>
   anti_join(st_drop_geometry(cells), by = "geoid") |>
   mutate(whole_area_m2 = geod_area(geometry)) |>
   st_intersection(place_cells |> select(cell_geoid = geoid)) |>
   suppressWarnings() |>
   st_make_valid() |>
-  mutate(part_share_area = geod_area(geometry) / whole_area_m2) |>
+  mutate(area_share = geod_area(geometry) / whole_area_m2) |>
   st_drop_geometry() |>
-  filter(part_share_area >= fold_share_min) |>
-  slice_max(part_share_area, n = 1, by = geoid, with_ties = FALSE) |>
+  select(geoid, cell_geoid, area_share)
+
+lift_pop <-
+  blocks |>
+  semi_join(lift_area, by = c("county_subdivision_geoid" = "geoid")) |>
+  semi_join(st_drop_geometry(place_cells), by = c("place_geoid" = "geoid")) |>
+  summarise(pop = sum(pop20), .by = c(county_subdivision_geoid, place_geoid)) |>
+  rename(geoid = county_subdivision_geoid, cell_geoid = place_geoid)
+
+lifted_cell <-
+  full_join(lift_area, lift_pop, by = c("geoid", "cell_geoid")) |>
+  mutate(pop = coalesce(pop, 0L), area_share = coalesce(area_share, 0)) |>
+  filter(any(area_share >= lift_share_min), .by = geoid) |>
+  arrange(geoid, desc(pop), desc(area_share), cell_geoid) |>
+  slice_head(n = 1, by = geoid) |>
   select(geoid, cell_geoid)
 
 county_subdivision_rows <-
@@ -382,21 +465,13 @@ cells <-
 
 # A place cell's county holds most of its 2020 population (land area where it
 # has none), by the block table; a subdivision cell's is its own. Each block
-# goes to its place's cell, else its subdivision's.
+# belongs to its place if the place is a cell, otherwise to its subdivision's
+# cell.
 block_cells <-
-  arrow::read_parquet(
-    "data/blocks-xwalk.parquet",
-    col_select = c(
-      "pop20",
-      "aland",
-      "county_geoid",
-      "place_geoid",
-      "county_subdivision_geoid"
-    )
-  ) |>
+  blocks |>
   left_join(
     xwalk |>
-      filter(geo_level == "place") |>
+      filter(geo_level == "place", cell_geoid == geoid) |>
       select(place_geoid = geoid, place_cell = cell_geoid),
     by = "place_geoid"
   ) |>
@@ -407,9 +482,11 @@ block_cells <-
     by = "county_subdivision_geoid"
   ) |>
   transmute(
+    place_geoid,
+    county_subdivision_geoid,
     geoid = coalesce(place_cell, subdivision_cell),
     county_geoid,
-    pop20 = coalesce(pop20, 0L),
+    pop20,
     aland
   )
 
@@ -444,8 +521,61 @@ cells <-
 # a place cell no block was assigned to (13 tiny CDPs and towns) has no county
 print(count(as_tibble(cells), geo_level, has_county = !is.na(county_geoid)))
 
+# The share of each unit's 2020 residents in its cell (cell_share) and in its
+# cell's county (county_share). Land area is used for units with no residents.
+unit_shares <-
+  block_cells |>
+  tidyr::pivot_longer(
+    c(place_geoid, county_subdivision_geoid),
+    names_to = NULL,
+    values_to = "unit",
+    values_drop_na = TRUE
+  ) |>
+  summarise(
+    pop = sum(pop20),
+    aland = sum(aland),
+    .by = c(unit, geoid, county_geoid)
+  ) |>
+  mutate(
+    has_residents = sum(pop) > 0,
+    weight = if (sum(pop) > 0) as.numeric(pop) else as.numeric(aland),
+    .by = unit
+  ) |>
+  mutate(cell_weight = sum(weight), .by = c(unit, geoid)) |>
+  left_join(xwalk |> select(unit = geoid, cell_geoid), by = "unit") |>
+  left_join(
+    cells |>
+      st_drop_geometry() |>
+      select(cell_geoid = geoid, cell_county = county_geoid),
+    by = "cell_geoid"
+  ) |>
+  summarise(
+    cell_share = sum(weight[which(geoid == cell_geoid)]) / sum(weight),
+    county_share = sum(weight[which(county_geoid == cell_county)]) /
+      sum(weight),
+    top_cell_share = max(cell_weight) / sum(weight),
+    has_residents = first(has_residents),
+    .by = unit
+  )
+
 xwalk <-
   xwalk |>
+  left_join(
+    unit_shares |> select(unit, cell_share, county_share),
+    by = c("geoid" = "unit")
+  ) |>
+  mutate(
+    cell_share = case_when(
+      is.na(cell_geoid) ~ NA_real_,
+      geo_level != "county_subdivision" & cell_geoid == geoid ~ 1,
+      is.finite(cell_share) ~ cell_share
+    ),
+    county_share = case_when(
+      is.na(cell_geoid) ~ NA_real_,
+      geo_level == "county" ~ 1,
+      is.finite(county_share) ~ county_share
+    )
+  ) |>
   left_join(
     cells |>
       st_drop_geometry() |>
@@ -457,6 +587,7 @@ xwalk <-
       ),
     by = "cell_geoid"
   ) |>
+  relocate(cell_share, county_share, .after = cell_geoid) |>
   arrange(stusps, geo_level, geoid)
 
 stopifnot(
@@ -476,6 +607,37 @@ stopifnot(
   "cell_geoid missing without a 'no cell' rule" = all(
     is.na(xwalk$cell_geoid) == str_starts(xwalk$rule, "no cell")
   ),
+  "cell_share or county_share is outside 0 to 1" = all(
+    (between(xwalk$cell_share, 0, 1) | is.na(xwalk$cell_share)) &
+      (between(xwalk$county_share, 0, 1) | is.na(xwalk$county_share))
+  ),
+  "a strong-town-state place is a cell without being a CDP in unorganized territory" = setequal(
+    xwalk |>
+      semi_join(st_drop_geometry(fold_candidates), by = "geoid") |>
+      filter(rule == "cell") |>
+      pull(geoid),
+    unorganized_cdps$geoid
+  ),
+  "a place has no cell without having chosen a subdivision" = all(
+    xwalk$geoid[xwalk$geo_level == "place" & is.na(xwalk$cell_geoid)] %in%
+      fold_choice$geoid
+  ),
+  "a folded place with blocks has no cell_share" = xwalk |>
+    filter(geo_level == "place", str_starts(rule, "folded")) |>
+    semi_join(unit_shares, by = c("geoid" = "unit")) |>
+    pull(cell_share) |>
+    anyNA() |>
+    isFALSE(),
+  "a folded place is not in the cell holding the largest share of its residents" = xwalk |>
+    filter(geo_level == "place", str_starts(rule, "folded")) |>
+    inner_join(
+      unit_shares |>
+        filter(has_residents) |>
+        select(geoid = unit, top_cell_share),
+      by = "geoid"
+    ) |>
+    summarise(ok = all(abs(cell_share - top_cell_share) < 1e-12)) |>
+    pull(ok),
   "an island-territory geoid has no cell" = !anyNA(
     xwalk$cell_geoid[xwalk$stusps %in% always_fold_states]
   ),
