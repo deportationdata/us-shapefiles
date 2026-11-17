@@ -6,6 +6,8 @@
 source("code/utils.R")
 
 # state = NULL fetches the one national CB places file (needs a recent tigris).
+# The 2025 CB polygon for Holdenville, OK (4035400) is wrong: 44.7 km2 drawn
+# for a 13.0 km2 city. It is used as is; the TIGER/Line polygon is correct.
 cb_places <-
   tigris::places(state = NULL, cb = TRUE, year = geo_vintage) |>
   transmute(
@@ -18,6 +20,18 @@ cb_places <-
   ) |>
   st_transform(4326)
 
+# FUNCSTAT and CLASSFP are in the TIGER/Line files, not the CB file
+place_codes <-
+  map(
+    state_codes,
+    \(s) {
+      tigris::places(s, cb = FALSE, year = geo_vintage, progress_bar = FALSE) |>
+        st_drop_geometry() |>
+        select(geoid = GEOID, funcstat = FUNCSTAT, classfp = CLASSFP)
+    }
+  ) |>
+  bind_rows()
+
 # The Census names a consolidated city minus its semi-independent municipalities
 # "<government> (balance)"; a display using short_name should footnote that.
 balance_short_names <- tribble(
@@ -26,7 +40,7 @@ balance_short_names <- tribble(
   "1303440", "Athens",       # minus Winterville and part of Bogart
   "1304204", "Augusta",      # minus Hephzibah and Blythe
   "1836003", "Indianapolis", # minus 4 cities and 11 included towns
-  "2148006", "Louisville Metro (balance)", # minus Louisville city and 83 other cities; holds half of Jefferson County
+  "2148006", "Louisville",   # plus Louisville city; minus 83 other cities
   "3011397", "Butte",        # minus Walkerville
   "4752006", "Nashville",    # minus Belle Meade, Berry Hill, Forest Hills, Oak
                              # Hill and parts of Goodlettsville and Ridgetop
@@ -61,10 +75,24 @@ places_sf <-
   mutate(pop20 = coalesce(pop20, 0L)) |> # a place with no populated block
   left_join(balance_short_names, by = "geoid") |>
   mutate(short_name = coalesce(short_name, name)) |>
-  select(geoid, stusps, name, namelsad, short_name, lsad, aland, pop20) |>
+  left_join(place_codes, by = "geoid") |>
+  select(
+    geoid,
+    stusps,
+    name,
+    namelsad,
+    short_name,
+    lsad,
+    funcstat,
+    classfp,
+    aland,
+    pop20
+  ) |>
   arrange(geoid)
 
 stopifnot(
+  !anyNA(places_sf$funcstat),
+  !anyNA(places_sf$classfp),
   !anyNA(places_sf$geoid),
   !anyDuplicated(places_sf$geoid),
   !any(st_is_empty(places_sf)),

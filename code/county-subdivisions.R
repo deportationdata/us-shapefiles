@@ -25,7 +25,26 @@ county_subdivisions_sf <-
   st_transform(4326) |>
   arrange(geoid)
 
+# FUNCSTAT and CLASSFP are in the TIGER/Line file, not the CB file
+county_subdivision_codes <-
+  map(
+    state_codes,
+    \(s) {
+      tigris::county_subdivisions(s, cb = FALSE, year = geo_vintage) |>
+        st_drop_geometry() |>
+        select(geoid = GEOID, funcstat = FUNCSTAT, classfp = CLASSFP)
+    }
+  ) |>
+  bind_rows()
+
+county_subdivisions_sf <-
+  county_subdivisions_sf |>
+  left_join(county_subdivision_codes, by = "geoid") |>
+  relocate(funcstat, classfp, .after = lsad)
+
 stopifnot(
+  !anyNA(county_subdivisions_sf$funcstat),
+  !anyNA(county_subdivisions_sf$classfp),
   !anyNA(county_subdivisions_sf$geoid),
   !anyDuplicated(county_subdivisions_sf$geoid),
   !any(st_is_empty(county_subdivisions_sf)),

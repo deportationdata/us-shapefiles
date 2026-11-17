@@ -17,9 +17,8 @@ sf_use_s2(FALSE)
 
 gnis <- st_read("data/gnis-populated-places-sf.parquet", quiet = TRUE)
 cells <- st_read("data/places-county-subdivisions-sf.parquet", quiet = TRUE)
-geoid_cell <-
-  arrow::read_parquet("data/places-county-subdivisions-xwalk.parquet") |>
-  select(geoid, cell_geoid)
+cell_xwalk <- arrow::read_parquet("data/places-county-subdivisions-xwalk.parquet")
+geoid_cell <- cell_xwalk |> select(geoid, cell_geoid)
 
 cell_attrs <-
   cells |>
@@ -34,7 +33,7 @@ cell_attrs <-
 # ---- tier 1: inside a cell --------------------------------------------------
 inside <-
   gnis |>
-  select(feature_id, stusps, name) |>
+  select(feature_id, stusps, name, county_geoid) |>
   st_join(cells |> select(cell_geoid = geoid), join = st_within, left = TRUE) |>
   mutate(match = if_else(is.na(cell_geoid), NA_character_, "cell"))
 
@@ -142,20 +141,14 @@ nearest <-
   )
 sf_use_s2(FALSE)
 
-# each tier's matches, plus whatever no tier placed
+# each later tier fills in what the one before left unmatched
 xwalk <-
-  bind_rows(
-    inside |> st_drop_geometry() |> filter(!is.na(cell_geoid)),
-    by_tiger |> filter(!is.na(cell_geoid)),
-    nearest,
-    by_tiger |> filter(is.na(cell_geoid), !tl_water)
-  ) |>
+  inside |>
+  st_drop_geometry() |>
   as_tibble() |>
+  rows_patch(by_tiger |> select(feature_id, cell_geoid, match), by = "feature_id") |>
+  rows_patch(nearest |> select(feature_id, cell_geoid, match), by = "feature_id") |>
   left_join(cell_attrs, by = "cell_geoid") |>
-  left_join(
-    gnis |> st_drop_geometry() |> select(feature_id, county_geoid),
-    by = "feature_id"
-  ) |>
   select(
     feature_id,
     stusps,
@@ -181,4 +174,96 @@ print(count(xwalk, match, cell_level))
 arrow::write_parquet(
   xwalk,
   "data/gnis-places-county-subdivisions-xwalk.parquet"
+)
+
+# ---- GNIS names on subdivision and county-remainder cells -------------------
+# One row per such cell, written to its own file. Names are ordered by the 2020 residents nearest each point (each populated
+# block goes to the cell's nearest point); that count is not a population.
+names_cell_types <- c("subdivision", "county_remainder")
+names_separator <- "; "
+
+named_cells <-
+  cells |>
+  st_drop_geometry() |>
+  filter(cell_type %in% names_cell_types) |>
+  select(cell_geoid = geoid)
+
+cell_points <-
+  xwalk |>
+  select(feature_id, name, cell_geoid) |>
+  semi_join(named_cells, by = "cell_geoid")
+
+stopifnot(!any(str_detect(cell_points$name, fixed(str_trim(names_separator)))))
+
+# each block's cell: its place's when the place is a cell, else its
+# subdivision's
+block_points <-
+  arrow::read_parquet(
+    "data/blocks-xwalk.parquet",
+    col_select = c("pop20", "lat", "lon", "place_geoid", "county_subdivision_geoid")
+  ) |>
+  filter(coalesce(pop20, 0L) > 0) |>
+  left_join(
+    cell_xwalk |>
+      filter(geo_level == "place", cell_level == "place") |>
+      select(place_geoid = geoid, place_cell = cell_geoid),
+    by = "place_geoid"
+  ) |>
+  left_join(
+    cell_xwalk |>
+      filter(geo_level == "county_subdivision") |>
+      select(county_subdivision_geoid = geoid, subdivision_cell = cell_geoid),
+    by = "county_subdivision_geoid"
+  ) |>
+  transmute(cell_geoid = coalesce(place_cell, subdivision_cell), pop20, lat, lon) |>
+  semi_join(cell_points, by = "cell_geoid")
+
+points_by_cell <-
+  gnis |>
+  select(feature_id) |>
+  inner_join(cell_points |> select(feature_id, cell_geoid), by = "feature_id")
+points_by_cell <- split(points_by_cell, points_by_cell$cell_geoid)
+
+# nearest on the sphere, as in tier 3
+sf_use_s2(TRUE)
+nearest_residents <-
+  block_points |>
+  st_as_sf(coords = c("lon", "lat"), crs = 4269) |> # Census points are NAD83
+  st_transform(st_crs(gnis)) |>
+  group_by(cell_geoid) |>
+  group_modify(\(b, key) {
+    p <- points_by_cell[[key$cell_geoid]]
+    tibble(feature_id = p$feature_id[st_nearest_feature(b, p)], pop20 = b$pop20) |>
+      count(feature_id, wt = pop20, name = "nearest_pop20")
+  }) |>
+  ungroup()
+sf_use_s2(FALSE)
+
+cell_names <-
+  cell_points |>
+  left_join(nearest_residents, by = c("cell_geoid", "feature_id")) |>
+  summarise(
+    nearest_pop20 = sum(nearest_pop20, na.rm = TRUE),
+    .by = c(cell_geoid, name)
+  ) |>
+  arrange(cell_geoid, desc(nearest_pop20), name) |>
+  summarise(
+    gnis_names = str_c(name, collapse = names_separator),
+    gnis_n = n(),
+    .by = cell_geoid
+  )
+
+named_cell_names <-
+  named_cells |>
+  left_join(cell_names, by = "cell_geoid") |>
+  mutate(gnis_n = coalesce(gnis_n, 0L)) |>
+  arrange(cell_geoid)
+
+stopifnot(!anyDuplicated(named_cell_names$cell_geoid))
+
+print(count(named_cell_names, has_names = !is.na(gnis_names)))
+
+arrow::write_parquet(
+  named_cell_names,
+  "data/gnis-places-county-subdivisions-names.parquet"
 )

@@ -1,43 +1,74 @@
 #!/usr/bin/env Rscript
 # Non-overlapping partition of the country into cells built from places and
 # county subdivisions, plus a geoid → cell crosswalk.
-#   cell         a place, a county subdivision, or a subdivision's remainder
-#                (what is left once its places are cut out); in AS, MP and
-#                VI, a county equivalent
+#   cell         a place, a county subdivision, a subdivision's remainder
+#                (what is left once its places are cut out), or a county
+#                remainder (a county's district leftovers as one cell); in AS,
+#                MP and VI, a county equivalent
 #   fold         assign a place to the subdivision cell holding most of its
 #                2020 residents
 #   lift         assign a subdivision to the place cell holding it
 #   merged place cell
 #                a town-state municipality split by a county line into
 #                subdivisions, rejoined as one place cell
-# Steps: merge split municipalities; fold town-state places and the CDPs of
-# NY, MI, WI and MN; cut place cells out of subdivisions, keeping remainders;
-# crosswalk every geoid; short names; a county for every cell, from
-# data/blocks-xwalk.parquet for place cells.
+#   consolidated merge
+#                a consolidated government's old city joined to the
+#                government's "(balance)" place as one place cell
+# The rules:
+#   1. A cell is the Census place: a city, town, village, borough or CDP.
+#   2. In twelve states the town or township is the place. A CDP that carries
+#      its town's name is part of it; any other CDP, city, village or borough
+#      is its own cell.
+#   3. Outside any place, the cell is the rest of the township or CCD. Where a
+#      county is divided only into districts or precincts, it is the rest of
+#      the county.
+# Steps: merge split municipalities; fold town-state municipalities and the
+# twelve states' CDPs named for their town; merge consolidated governments;
+# cut place cells out of subdivisions, keeping remainders; merge district
+# leftovers by county; crosswalk every geoid; short names; a county for every
+# cell, from data/blocks-xwalk.parquet for place cells.
 
 source("code/utils.R")
 
 sf_use_s2(FALSE)
 
 # The twelve states where the Census Bureau treats towns and townships as
-# general-purpose governments (2020 PL 94-171 technical documentation, App. A,
-# pp. A-21 to A-22). A CDP is never a cell there. Every place folds in
-# town_states; only CDPs fold in cdp_fold_states. Elsewhere every place is a
-# cell.
-# In New England a town is a municipality, which matters for short names.
+# equivalent to places (2020 PL 94-171 technical documentation, App. A,
+# pp. A-21 to A-22). In town_states a municipality is its own subdivision and
+# folds into it. In all twelve a CDP folds only when it carries its town's
+# name. In New England a town is a municipality, which matters for short names.
 town_states <- c("ME", "NH", "VT", "MA", "RI", "CT", "NJ", "PA")
 new_england <- c("ME", "NH", "VT", "MA", "RI", "CT")
 cdp_fold_states <- c("NY", "MI", "WI", "MN")
 
-# A CDP in unorganized territory has no local government to fold into, so it
-# stays a cell. A CDP on a reservation folds.
+# Eight more states have active townships, but there the township overlies
+# cities and is not the place. Only checked against the data below.
+active_township_states <- c("IL", "IN", "KS", "MO", "NE", "ND", "OH", "SD")
+active_township_classfp <- c("T1", "T5")
+
+# A consolidated government's old city joins its "(balance)" place as one cell.
+consolidated_merges <- tribble(
+  ~geoid,    ~merged_into,
+  "2148000", "2148006" # Louisville city into Louisville/Jefferson County metro
+)
+
+# A CDP in unorganized territory has no town to fold into, so it stays a cell.
 unorganized_lsad <- "46"
+
+# Branford Center CDP in Branford town carries the town's name.
+town_centre_suffix <- " (Center|Village|Town)$"
 
 # Island villages are far smaller than mainland cells. In AS, MP and VI the
 # county equivalent is the cell; in Guam, one county equivalent, the
 # municipality is.
 county_cell_states <- c("AS", "MP", "VI")
 always_fold_states <- c(county_cell_states, "GU")
+
+# Districts and precincts are not place names (over half carry only a number
+# or letter), so a county's district leftovers merge into one cell: the
+# county's geoid plus 99999, the Census's own remainder code.
+district_lsad <- c("27", "28", "29", "30")
+county_remainder_code <- "99999"
 
 # A subdivision lifts if a place holds >= lift_share_min of its area. One that
 # keeps >= whole_share of its area is untouched. A remainder under sliver_m2,
@@ -69,6 +100,8 @@ places <-
     namelsad,
     short_name,
     is_cdp = str_ends(namelsad, "CDP"),
+    funcstat,
+    classfp,
     county_geoid = NA_character_, # a place can span counties
     aland,
     geometry
@@ -79,8 +112,36 @@ county_subdivisions <-
   st_read("data/county-subdivisions-sf.parquet", quiet = TRUE) |>
   st_make_valid()
 
-county_cells <-
+stopifnot(
+  "the states with active towns or townships are not the twelve plus active_township_states" = setequal(
+    setdiff(
+      county_subdivisions$stusps[
+        county_subdivisions$classfp %in% active_township_classfp
+      ],
+      always_fold_states # American Samoa's counties are active
+    ),
+    c(town_states, cdp_fold_states, active_township_states)
+  ),
+  # cell_type below sorts cells by these codes; a new one needs a decision
+  "a place has a class code cell_type does not know" = all(
+    places$classfp %in%
+      c("C1", "C2", "C5", "C6", "C7", "C8", "C9", "M2", "U1", "U2")
+  ),
+  "a place's status and class codes disagree on whether it is statistical" = all(
+    (places$funcstat == "S") == str_detect(places$classfp, "^[MU]")
+  ),
+  "a subdivision has a class code cell_type does not know" = all(
+    county_subdivisions$classfp %in%
+      c("C2", "C5", "T1", "T5", "T9", "Z1", "Z2", "Z3", "Z5", "Z7")
+  )
+)
+
+counties <-
   st_read("data/counties-sf.parquet", quiet = TRUE) |>
+  st_make_valid()
+
+county_cells <-
+  counties |>
   filter(stusps %in% county_cell_states) |>
   transmute(
     geoid,
@@ -90,8 +151,7 @@ county_cells <-
     geo_level = "county",
     county_geoid = geoid,
     geometry
-  ) |>
-  st_make_valid()
+  )
 
 blocks <-
   arrow::read_parquet(
@@ -149,7 +209,9 @@ merged_place_cells <-
   summarize(geometry = st_union(geometry), .groups = "drop") |>
   st_make_valid() |>
   left_join(
-    places |> as_tibble() |> select(geoid, name, namelsad, short_name),
+    places |>
+      as_tibble() |>
+      select(geoid, name, namelsad, short_name, funcstat, classfp),
     by = "geoid"
   ) |>
   mutate(geo_level = "place", county_geoid = NA_character_)
@@ -233,25 +295,31 @@ fold_choice <-
   arrange(geoid, desc(pop), desc(area_share), cell_geoid) |>
   slice_head(n = 1, by = geoid) |>
   left_join(
-    county_subdivisions |> as_tibble() |> select(cell_geoid = geoid, lsad),
+    county_subdivisions |>
+      as_tibble() |>
+      select(cell_geoid = geoid, lsad, cell_name = name),
     by = "cell_geoid"
   ) |>
   left_join(
-    fold_candidates |> st_drop_geometry() |> select(geoid, stusps, is_cdp),
+    fold_candidates |> st_drop_geometry() |> select(geoid, stusps, is_cdp, place_name = name),
     by = "geoid"
   )
 
-unorganized_cdps <-
+# A CDP stays a cell in unorganized territory, or when its name is not its
+# town's.
+kept_places <-
   fold_choice |>
   filter(
     is_cdp,
-    lsad %in% unorganized_lsad,
-    !stusps %in% always_fold_states
+    !stusps %in% always_fold_states,
+    lsad %in% unorganized_lsad |
+      (place_name != cell_name &
+        str_remove(place_name, town_centre_suffix) != cell_name)
   )
 
 folded_cell <-
   fold_choice |>
-  anti_join(unorganized_cdps, by = "geoid") |>
+  anti_join(kept_places, by = "geoid") |>
   select(geoid, cell_geoid)
 
 # every place that neither merged nor folded is a cell
@@ -259,6 +327,20 @@ place_cells <-
   places |>
   anti_join(st_drop_geometry(merged_place_cells), by = "geoid") |>
   anti_join(folded_cell, by = "geoid")
+
+# a consolidated government's old city joins the balance cell
+stopifnot(
+  all(unlist(consolidated_merges) %in% place_cells$geoid),
+  !anyDuplicated(consolidated_merges$geoid),
+  !any(consolidated_merges$merged_into %in% consolidated_merges$geoid)
+)
+for (k in seq_len(nrow(consolidated_merges))) {
+  from <- place_cells$geoid == consolidated_merges$geoid[k]
+  into <- place_cells$geoid == consolidated_merges$merged_into[k]
+  st_geometry(place_cells)[into] <-
+    st_make_valid(st_union(st_geometry(place_cells)[from | into]))
+  place_cells <- place_cells[!from, ]
+}
 
 # prep step for below to avoid cross-state issues
 place_union <-
@@ -302,14 +384,81 @@ subdivision_cells <-
   ) |>
   select(-subtracted, -area_m2, -full_m2, -width_m, -sliver)
 
+# district leftovers become one cell per county
+to_county_remainder <-
+  subdivision_cells |>
+  filter(
+    lsad %in% district_lsad,
+    !stusps %in% always_fold_states
+  ) |>
+  mutate(remainder_geoid = str_c(county_geoid, county_remainder_code))
+
+county_remainder_of <-
+  to_county_remainder |>
+  st_drop_geometry() |>
+  select(geoid, remainder_geoid)
+
+county_remainder_cells <-
+  to_county_remainder |>
+  group_by(geoid = remainder_geoid, stusps, county_geoid) |>
+  summarize(geometry = st_union(geometry), .groups = "drop") |>
+  st_make_valid() |>
+  left_join(
+    counties |>
+      st_drop_geometry() |>
+      select(county_geoid = geoid, name, county_namelsad = namelsad),
+    by = "county_geoid"
+  ) |>
+  mutate(
+    namelsad = str_c(county_namelsad, " (remainder)"),
+    geo_level = "county_remainder"
+  ) |>
+  select(-county_namelsad)
+
+stopifnot(
+  !anyNA(county_remainder_cells$namelsad),
+  !any(county_remainder_cells$geoid %in% county_subdivisions$geoid),
+  "a place folds into a district that is merged into its county" = !any(
+    folded_cell$cell_geoid %in% county_remainder_of$geoid
+  )
+)
+
+subdivision_cells <-
+  subdivision_cells |>
+  anti_join(county_remainder_of, by = "geoid")
+
 cells <-
   bind_rows(
     place_cells |> mutate(geo_level = "place"),
     merged_place_cells,
     subdivision_cells,
+    county_remainder_cells,
     county_cells
   ) |>
-  select(geoid, stusps, name, namelsad, geo_level, county_geoid, geometry) |>
+  # Describes the cell from the Census class and status codes; the rules above
+  # do not depend on it.
+  mutate(
+    cell_type = case_when(
+      geo_level == "county" ~ "county",
+      geo_level == "county_remainder" ~ "county_remainder",
+      geo_level == "place" & funcstat == "S" ~ "cdp",
+      geo_level == "place" & classfp == "C9" ~ "inactive_municipality",
+      geo_level == "place" ~ "municipality",
+      classfp == "C5" ~ "municipality",
+      classfp %in% active_township_classfp ~ "township",
+      TRUE ~ "subdivision"
+    )
+  ) |>
+  select(
+    geoid,
+    stusps,
+    name,
+    namelsad,
+    geo_level,
+    cell_type,
+    county_geoid,
+    geometry
+  ) |>
   arrange(stusps, geo_level, geoid)
 
 stopifnot(!anyDuplicated(cells$geoid))
@@ -328,17 +477,23 @@ place_rows <-
       rename(folded_geoid = cell_geoid),
     by = "geoid"
   ) |>
+  left_join(consolidated_merges, by = "geoid") |>
   mutate(
-    cell_geoid = if_else(coalesce(is_cell, FALSE), geoid, folded_geoid),
+    cell_geoid = case_when(
+      coalesce(is_cell, FALSE) ~ geoid,
+      !is.na(merged_into) ~ merged_into,
+      TRUE ~ folded_geoid
+    ),
     rule = case_when(
       geoid %in% merged_place_cells$geoid ~ "cell: merged across county line",
       cell_geoid == geoid ~ "cell",
-      nchar(cell_geoid) == 5 ~ "folded into county equivalent",
+      !is.na(merged_into) ~ "merged into consolidated government",
+      stusps %in% county_cell_states ~ "folded into county equivalent",
       !is.na(cell_geoid) ~ "folded into subdivision",
       TRUE ~ "no cell: its subdivision is covered by places"
     )
   ) |>
-  select(-folded_geoid, -is_cell)
+  select(-folded_geoid, -is_cell, -merged_into)
 
 # A county subdivision with no remainder lifts into a place cell, picked by
 # residents, then area, then geoid. Split pieces already have their merged
@@ -346,6 +501,7 @@ place_rows <-
 lift_area <-
   unsplit |>
   anti_join(st_drop_geometry(cells), by = "geoid") |>
+  anti_join(county_remainder_of, by = "geoid") |>
   mutate(whole_area_m2 = geod_area(geometry)) |>
   st_intersection(place_cells |> select(cell_geoid = geoid)) |>
   suppressWarnings() |>
@@ -357,6 +513,9 @@ lift_area <-
 lift_pop <-
   blocks |>
   semi_join(lift_area, by = c("county_subdivision_geoid" = "geoid")) |>
+  # an old city's residents count for the cell it merged into
+  left_join(consolidated_merges, by = c("place_geoid" = "geoid")) |>
+  mutate(place_geoid = coalesce(merged_into, place_geoid)) |>
   semi_join(st_drop_geometry(place_cells), by = c("place_geoid" = "geoid")) |>
   summarise(pop = sum(pop20), .by = c(county_subdivision_geoid, place_geoid)) |>
   rename(geoid = county_subdivision_geoid, cell_geoid = place_geoid)
@@ -374,22 +533,25 @@ county_subdivision_rows <-
   left_join(split_pieces, by = "geoid") |>
   left_join(lifted_cell |> rename(lifted_geoid = cell_geoid), by = "geoid") |>
   left_join(is_cell, by = "geoid") |>
+  left_join(county_remainder_of, by = "geoid") |>
   mutate(
     cell_geoid = case_when(
       coalesce(is_cell, FALSE) ~ geoid,
       !is.na(merged_geoid) ~ merged_geoid,
       stusps %in% county_cell_states ~ county_geoid,
+      !is.na(remainder_geoid) ~ remainder_geoid,
       TRUE ~ lifted_geoid
     ),
     rule = case_when(
       cell_geoid == geoid ~ "cell",
       !is.na(merged_geoid) ~ "merged across county line",
       stusps %in% county_cell_states ~ "folded into county equivalent",
+      !is.na(remainder_geoid) ~ "merged into county remainder",
       !is.na(cell_geoid) ~ "lifted into place",
       TRUE ~ "no cell: covered by several places"
     )
   ) |>
-  select(-merged_geoid, -lifted_geoid, -is_cell)
+  select(-merged_geoid, -lifted_geoid, -is_cell, -remainder_geoid)
 
 # county cells are in the xwalk too, so a 5-digit island geoid finds its cell
 county_rows <-
@@ -471,7 +633,10 @@ block_cells <-
   blocks |>
   left_join(
     xwalk |>
-      filter(geo_level == "place", cell_geoid == geoid) |>
+      filter(
+        geo_level == "place",
+        cell_geoid == geoid | rule == "merged into consolidated government"
+      ) |>
       select(place_geoid = geoid, place_cell = cell_geoid),
     by = "place_geoid"
   ) |>
@@ -508,9 +673,23 @@ place_county <-
   slice_max(county_share, n = 1, by = geoid, with_ties = FALSE) |>
   select(geoid, place_county_geoid = county_geoid, county_share)
 
+# a place cell smaller than any block takes the county holding most of its area
+area_county <-
+  cells |>
+  filter(is.na(county_geoid)) |>
+  anti_join(place_county, by = "geoid") |>
+  select(geoid) |>
+  st_intersection(counties |> select(place_county_geoid = geoid)) |>
+  suppressWarnings() |>
+  mutate(area_m2 = geod_area(geometry)) |>
+  st_drop_geometry() |>
+  mutate(county_share = area_m2 / sum(area_m2), .by = geoid) |>
+  slice_max(county_share, n = 1, by = geoid, with_ties = FALSE) |>
+  select(geoid, place_county_geoid, county_share)
+
 cells <-
   cells |>
-  left_join(place_county, by = "geoid") |>
+  left_join(bind_rows(place_county, area_county), by = "geoid") |>
   mutate(
     county_share = if_else(is.na(county_geoid), county_share, 1),
     county_geoid = coalesce(county_geoid, place_county_geoid)
@@ -518,8 +697,8 @@ cells <-
   select(-place_county_geoid) |>
   relocate(county_share, .after = county_geoid)
 
-# a place cell no block was assigned to (13 tiny CDPs and towns) has no county
-print(count(as_tibble(cells), geo_level, has_county = !is.na(county_geoid)))
+stopifnot(!anyNA(cells$county_geoid), !anyNA(cells$county_share))
+print(area_county)
 
 # The share of each unit's 2020 residents in its cell (cell_share) and in its
 # cell's county (county_share). Land area is used for units with no residents.
@@ -558,35 +737,70 @@ unit_shares <-
     .by = unit
   )
 
+# A unit with no blocks, or whose blocks have no residents and no land, takes
+# the share of its polygon's area that is inside its cell.
+area_cell_shares <-
+  bind_rows(select(places, geoid), select(county_subdivisions, geoid)) |>
+  inner_join(
+    xwalk |>
+      filter(!is.na(cell_geoid)) |>
+      anti_join(
+        unit_shares |> filter(is.finite(cell_share)),
+        by = c("geoid" = "unit")
+      ) |>
+      select(geoid, cell_geoid),
+    by = "geoid"
+  ) |>
+  mutate(unit_m2 = geod_area(geometry)) |>
+  st_intersection(cells |> select(in_cell = geoid)) |>
+  suppressWarnings() |>
+  filter(in_cell == cell_geoid) |>
+  st_make_valid() |>
+  mutate(area_cell_share = pmin(geod_area(geometry) / unit_m2, 1)) |>
+  st_drop_geometry() |>
+  select(geoid, area_cell_share)
+
 xwalk <-
   xwalk |>
   left_join(
     unit_shares |> select(unit, cell_share, county_share),
     by = c("geoid" = "unit")
   ) |>
-  mutate(
-    cell_share = case_when(
-      is.na(cell_geoid) ~ NA_real_,
-      geo_level != "county_subdivision" & cell_geoid == geoid ~ 1,
-      is.finite(cell_share) ~ cell_share
-    ),
-    county_share = case_when(
-      is.na(cell_geoid) ~ NA_real_,
-      geo_level == "county" ~ 1,
-      is.finite(county_share) ~ county_share
-    )
-  ) |>
+  left_join(area_cell_shares, by = "geoid") |>
   left_join(
     cells |>
       st_drop_geometry() |>
       select(
         cell_geoid = geoid,
         cell_level = geo_level,
+        cell_type,
         cell_namelsad = namelsad,
-        cell_short_name = short_name
+        cell_short_name = short_name,
+        cell_county = county_geoid,
+        cell_county_share = county_share
       ),
     by = "cell_geoid"
   ) |>
+  mutate(
+    cell_share = case_when(
+      is.na(cell_geoid) ~ NA_real_,
+      geo_level != "county_subdivision" & cell_geoid == geoid ~ 1,
+      is.finite(cell_share) ~ cell_share,
+      TRUE ~ area_cell_share
+    ),
+    county_share = case_when(
+      is.na(cell_geoid) ~ NA_real_,
+      geo_level == "county" ~ 1,
+      is.finite(county_share) ~ county_share,
+      # a place cell with no blocks: its polygon's area share
+      geo_level == "place" & cell_geoid == geoid ~ cell_county_share,
+      # a subdivision with no blocks, or none with residents or land: it lies
+      # in one county
+      geo_level == "county_subdivision" ~
+        as.numeric(str_sub(geoid, 1, 5) == cell_county)
+    )
+  ) |>
+  select(-cell_county, -cell_county_share, -area_cell_share) |>
   relocate(cell_share, county_share, .after = cell_geoid) |>
   arrange(stusps, geo_level, geoid)
 
@@ -611,12 +825,30 @@ stopifnot(
     (between(xwalk$cell_share, 0, 1) | is.na(xwalk$cell_share)) &
       (between(xwalk$county_share, 0, 1) | is.na(xwalk$county_share))
   ),
-  "a strong-town-state place is a cell without being a CDP in unorganized territory" = setequal(
+  "a fold candidate is a cell without being a kept place" = setequal(
     xwalk |>
       semi_join(st_drop_geometry(fold_candidates), by = "geoid") |>
       filter(rule == "cell") |>
       pull(geoid),
-    unorganized_cdps$geoid
+    kept_places$geoid
+  ),
+  "a geoid with a cell has no cell_share or county_share" = !anyNA(
+    xwalk[!is.na(xwalk$cell_geoid), c("cell_share", "county_share")]
+  ),
+  # gnis-places-county-subdivisions.R finds a place's blocks by cell_level
+  "a place's cell is a place without it being a cell or a consolidated merge" = with(
+    filter(xwalk, geo_level == "place", !is.na(cell_geoid)),
+    all(
+      (cell_level == "place") ==
+        (cell_geoid == geoid | rule == "merged into consolidated government")
+    )
+  ),
+  "Branford Center or Cross Village CDP does not fold, or Hampton Beach CDP does" = identical(
+    xwalk |>
+      filter(geoid %in% c("0907345", "2618880", "3333140")) |>
+      arrange(geoid) |>
+      pull(cell_namelsad),
+    c("Branford town", "Cross Village township", "Hampton Beach CDP")
   ),
   "a place has no cell without having chosen a subdivision" = all(
     xwalk$geoid[xwalk$geo_level == "place" & is.na(xwalk$cell_geoid)] %in%
@@ -664,8 +896,7 @@ stopifnot(
       )
   ),
   "a cell's county is not in counties-sf" = all(
-    cells$county_geoid %in%
-      c(arrow::read_parquet("data/counties-sf.parquet")$geoid, NA)
+    cells$county_geoid %in% counties$geoid
   )
 )
 
@@ -706,6 +937,7 @@ stopifnot(
 
 print(count(as_tibble(cells), geo_level))
 print(count(xwalk, geo_level, rule))
+print(count(as_tibble(cells), cell_type))
 
 sf::st_write(
   cells,
