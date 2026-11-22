@@ -1,0 +1,26 @@
+state,type,geoid,name,namelsad,classfp,funcstat,pop20,current_treatment,towns,n_towns,same_name_as_main_town,usps_place_name,usps_main_town_name,zips
+NH,cdp,3300980,Alton,Alton CDP,U1,S,499,folded into Alton town,Alton town (100%),1,TRUE,primary,primary,03809 (98% of residents): USPS primary=Alton; acceptable=-; avoid=-
+NH,cdp,3301220,Amherst,Amherst CDP,U1,S,697,folded into Amherst town,Amherst town (100%),1,TRUE,primary,primary,03031 (100% of residents): USPS primary=Amherst; acceptable=-; avoid=-
+NH,cdp,3301940,Ashland,Ashland CDP,U1,S,1082,folded into Ashland town,Ashland town (100%),1,TRUE,primary,primary,03217 (100% of residents): USPS primary=Ashland; acceptable=-; avoid=-
+NH,cdp,3303620,Bartlett,Bartlett CDP,U1,S,351,folded into Bartlett town,Bartlett town (100%),1,TRUE,primary,primary,"03812 (100% of residents): USPS primary=Bartlett; acceptable=Harts Lctn, Harts Location; avoid=-"
+NH,cdp,3308900,Canaan,Canaan CDP,U1,S,442,folded into Canaan town,Canaan town (100%),1,TRUE,primary,primary,03741 (100% of residents): USPS primary=Canaan; acceptable=Orange; avoid=-
+NH,cdp,3314340,Contoocook,Contoocook CDP,U1,S,1427,own cell,Hopkinton town (100%),1,FALSE,primary,acceptable,03229 (100% of residents): USPS primary=Contoocook; acceptable=Hopkinton; avoid=-
+NH,cdp,3324580,Epping,Epping CDP,U1,S,2693,folded into Epping town,Epping town (100%),1,TRUE,primary,primary,03042 (100% of residents): USPS primary=Epping; acceptable=-; avoid=-
+NH,cdp,3325940,Farmington,Farmington CDP,U1,S,3824,folded into Farmington town,Farmington town (100%),1,TRUE,primary,primary,03835 (100% of residents): USPS primary=Farmington; acceptable=-; avoid=-
+NH,cdp,3329780,Goffstown,Goffstown CDP,U1,S,3366,folded into Goffstown town (remainder),Goffstown town (100%),1,TRUE,primary,primary,03045 (100% of residents): USPS primary=Goffstown; acceptable=-; avoid=-
+NH,cdp,3331860,Greenville,Greenville CDP,U1,S,1074,folded into Greenville town,Greenville town (100%),1,TRUE,primary,primary,03048 (100% of residents): USPS primary=Greenville; acceptable=Mason; avoid=-
+NH,cdp,3332260,Groveton,Groveton CDP,U1,S,1068,own cell,Northumberland town (100%),1,FALSE,primary,acceptable,"03582 (100% of residents): USPS primary=Groveton; acceptable=Northumberland, Northumberlnd, Stark; avoid=-"
+NH,cdp,3347060,Meredith,Meredith CDP,U1,S,2527,folded into Meredith town,Meredith town (100%),1,TRUE,primary,primary,03253 (100% of residents): USPS primary=Meredith; acceptable=-; avoid=-
+NH,cdp,3349600,Mountain Lakes,Mountain Lakes CDP,U1,S,504,own cell,Haverhill town (77%); Bath town (23%),2,FALSE,not a USPS name,primary,"03785 (77% of residents): USPS primary=Woodsville; acceptable=Benton; avoid=Easton, Landaff || 03740 (23% of residents): USPS primary=Bath; acceptable=-; avoid=-"
+NH,cdp,3350660,New Boston,New Boston CDP,U1,S,326,folded into New Boston town (remainder),New Boston town (100%),1,TRUE,primary,primary,03070 (100% of residents): USPS primary=New Boston; acceptable=-; avoid=-
+NH,cdp,3352020,New London,New London CDP,U1,S,1266,folded into New London town,New London town (100%),1,TRUE,primary,primary,03257 (100% of residents): USPS primary=New London; acceptable=-; avoid=Sutton
+NH,cdp,3351300,Newfields,Newfields CDP,U1,S,378,folded into Newfields town,Newfields town (100%),1,TRUE,primary,primary,03856 (100% of residents): USPS primary=Newfields; acceptable=-; avoid=-
+NH,cdp,3352260,Newmarket,Newmarket CDP,U1,S,5797,folded into Newmarket town,Newmarket town (100%),1,TRUE,primary,primary,03857 (100% of residents): USPS primary=Newmarket; acceptable=-; avoid=-
+NH,cdp,3360500,Peterborough,Peterborough CDP,U1,S,3090,folded into Peterborough town,Peterborough town (100%),1,TRUE,primary,primary,03458 (100% of residents): USPS primary=Peterborough; acceptable=Sharon; avoid=-
+NH,cdp,3362260,Plainfield,Plainfield CDP,U1,S,178,folded into Plainfield town,Plainfield town (100%),1,TRUE,primary,primary,03781 (100% of residents): USPS primary=Plainfield; acceptable=-; avoid=-
+NH,cdp,3362580,Plymouth,Plymouth CDP,U1,S,4730,folded into Plymouth town,Plymouth town (100%),1,TRUE,primary,primary,03264 (100% of residents): USPS primary=Plymouth; acceptable=-; avoid=Bridgewater
+NH,cdp,3363940,Raymond,Raymond CDP,U1,S,3738,folded into Raymond town,Raymond town (100%),1,TRUE,primary,primary,03077 (100% of residents): USPS primary=Raymond; acceptable=-; avoid=-
+NH,cdp,3374780,Suissevale,Suissevale CDP,U1,S,328,own cell,Moultonborough town (100%),1,FALSE,not a USPS name,primary,03254 (100% of residents): USPS primary=Moultonborough; acceptable=Moultonboro; avoid=-
+NH,cdp,3377100,Tilton Northfield,Tilton Northfield CDP,U2,S,3324,own cell,Tilton town (55%); Northfield town (45%),2,FALSE,not a USPS name,primary,03276 (100% of residents): USPS primary=Tilton; acceptable=Northfield; avoid=-
+NH,cdp,3377780,Union,Union CDP,U1,S,196,own cell,Wakefield town (100%),1,FALSE,primary,avoid,03887 (100% of residents): USPS primary=Union; acceptable=Middleton; avoid=-
+NH,cdp,3386340,Wolfeboro,Wolfeboro CDP,U1,S,3300,folded into Wolfeboro town,Wolfeboro town (100%),1,TRUE,primary,primary,03894 (100% of residents): USPS primary=Wolfeboro; acceptable=-; avoid=Tuftonboro

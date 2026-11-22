@@ -1,48 +1,33 @@
 #!/usr/bin/env Rscript
-# Non-overlapping partition of the country into cells built from places and
-# county subdivisions, plus a geoid → cell crosswalk.
-#   cell         a place, a county subdivision, a subdivision's remainder
-#                (what is left once its places are cut out), or a county
-#                remainder (a county's district leftovers as one cell); in AS,
-#                MP and VI, a county equivalent
-#   fold         assign a place to the subdivision cell holding most of its
-#                2020 residents
-#   lift         assign a subdivision to the place cell holding it
-#   merged place cell
-#                a town-state municipality split by a county line into
-#                subdivisions, rejoined as one place cell
-#   consolidated merge
-#                a consolidated government's old city joined to the
-#                government's "(balance)" place as one place cell
-# The rules:
-#   1. A cell is the Census place: a city, town, village, borough or CDP.
-#   2. In twelve states the town or township is the place. A CDP that carries
-#      its town's name is part of it; any other CDP, city, village or borough
-#      is its own cell.
-#   3. Outside any place, the cell is the rest of the township or CCD. Where a
-#      county is divided only into districts or precincts, it is the rest of
-#      the county.
-# Steps: merge split municipalities; fold town-state municipalities and the
-# twelve states' CDPs named for their town; merge consolidated governments;
-# cut place cells out of subdivisions, keeping remainders; merge district
-# leftovers by county; crosswalk every geoid; short names; a county for every
-# cell, from data/blocks-xwalk.parquet for place cells.
+# Divides the United States into non-overlapping cells built from Census places
+# and county subdivisions, and writes a geoid → cell crosswalk.
+# A place folds into the subdivision cell holding most of its residents; a
+# subdivision lifts into the place cell holding it.
+#   1. A Census place is a cell.
+#   2. In twelve states the town or township is the cell. A place inside it
+#      folds into it when it carries the town's name; a place with another
+#      name is its own cell and the town keeps the remainder. A municipality
+#      covering a whole subdivision is one cell with it.
+#   3. In AS, MP and VI the county equivalent is the cell; in Guam, the
+#      municipality.
+#   4. Land in no place cell is its subdivision's remainder. District and
+#      precinct remainders merge by county.
 
 source("code/utils.R")
 
 sf_use_s2(FALSE)
 
-# The twelve states where the Census Bureau treats towns and townships as
-# equivalent to places (2020 PL 94-171 technical documentation, App. A,
-# pp. A-21 to A-22). In town_states a municipality is its own subdivision and
-# folds into it. In all twelve a CDP folds only when it carries its town's
-# name. In New England a town is a municipality, which matters for short names.
+# The twelve states whose towns and townships "serve as general-purpose local
+# governments that can perform the same governmental functions as incorporated
+# places" (2020 PL 94-171 technical documentation, App. A, pp. A-21 to A-22).
+# A municipality covering a whole subdivision folds into it in town_states and
+# stays a place cell, the subdivision lifted into it, in place_cell_states.
 town_states <- c("ME", "NH", "VT", "MA", "RI", "CT", "NJ", "PA")
 new_england <- c("ME", "NH", "VT", "MA", "RI", "CT")
-cdp_fold_states <- c("NY", "MI", "WI", "MN")
+place_cell_states <- c("NY", "MI", "WI", "MN")
 
-# Eight more states have active townships, but there the township overlies
-# cities and is not the place. Only checked against the data below.
+# Eight more states have active townships that overlie cities. Only used in a
+# check below.
 active_township_states <- c("IL", "IN", "KS", "MO", "NE", "ND", "OH", "SD")
 active_township_classfp <- c("T1", "T5")
 
@@ -58,15 +43,12 @@ unorganized_lsad <- "46"
 # Branford Center CDP in Branford town carries the town's name.
 town_centre_suffix <- " (Center|Village|Town)$"
 
-# Island villages are far smaller than mainland cells. In AS, MP and VI the
-# county equivalent is the cell; in Guam, one county equivalent, the
-# municipality is.
+# Island villages are far smaller than mainland cells.
 county_cell_states <- c("AS", "MP", "VI")
 always_fold_states <- c(county_cell_states, "GU")
 
 # Districts and precincts are not place names (over half carry only a number
-# or letter), so a county's district leftovers merge into one cell: the
-# county's geoid plus 99999, the Census's own remainder code.
+# or letter). 99999 is the Census's own remainder code.
 district_lsad <- c("27", "28", "29", "30")
 county_remainder_code <- "99999"
 
@@ -120,9 +102,8 @@ stopifnot(
       ],
       always_fold_states # American Samoa's counties are active
     ),
-    c(town_states, cdp_fold_states, active_township_states)
+    c(town_states, place_cell_states, active_township_states)
   ),
-  # cell_type below sorts cells by these codes; a new one needs a decision
   "a place has a class code cell_type does not know" = all(
     places$classfp %in%
       c("C1", "C2", "C5", "C6", "C7", "C8", "C9", "M2", "U1", "U2")
@@ -173,7 +154,6 @@ geod_perimeter <- function(g) s2::s2_perimeter(st_as_s2(g))
 # A municipality split by a county line becomes one place cell: a subdivision
 # geoid is state + county + code, and in the town states a municipality's code
 # is its place code, so state + code is the place geoid its pieces share.
-# there are currently 12 split municipalities, all in PA
 split_pieces <-
   county_subdivisions |>
   as_tibble() |>
@@ -250,21 +230,25 @@ fold_units <- bind_rows(
 # its area if it has no residents.
 fold_candidates <-
   places |>
-  filter(
-    stusps %in% c(town_states, always_fold_states) |
-      (stusps %in% cdp_fold_states & is_cdp)
-  ) |>
+  filter(stusps %in% c(town_states, place_cell_states, always_fold_states)) |>
   anti_join(st_drop_geometry(merged_place_cells), by = "geoid")
 
 fold_area <-
   fold_candidates |>
   mutate(whole_m2 = geod_area(geometry)) |>
-  st_intersection(fold_units |> select(cell_geoid = geoid)) |>
+  st_intersection(
+    fold_units |>
+      mutate(unit_m2 = geod_area(geometry)) |>
+      select(cell_geoid = geoid, unit_m2)
+  ) |>
   suppressWarnings() |>
   st_make_valid() |>
-  mutate(area_share = geod_area(geometry) / whole_m2) |>
+  mutate(
+    area_share = geod_area(geometry) / whole_m2,
+    unit_share = geod_area(geometry) / unit_m2
+  ) |>
   st_drop_geometry() |>
-  select(geoid, cell_geoid, area_share)
+  select(geoid, cell_geoid, area_share, unit_share)
 
 # Blocks in no defined subdivision (code 00000) are left out.
 fold_pop <-
@@ -288,10 +272,13 @@ fold_pop <-
   summarise(pop = sum(pop20), .by = c(place_geoid, cell_geoid)) |>
   rename(geoid = place_geoid)
 
-# Pick by most residents, then most area, then lowest geoid.
 fold_choice <-
   full_join(fold_area, fold_pop, by = c("geoid", "cell_geoid")) |>
-  mutate(pop = coalesce(pop, 0L), area_share = coalesce(area_share, 0)) |>
+  mutate(
+    pop = coalesce(pop, 0L),
+    area_share = coalesce(area_share, 0),
+    unit_share = coalesce(unit_share, 0)
+  ) |>
   arrange(geoid, desc(pop), desc(area_share), cell_geoid) |>
   slice_head(n = 1, by = geoid) |>
   left_join(
@@ -305,16 +292,21 @@ fold_choice <-
     by = "geoid"
   )
 
-# A CDP stays a cell in unorganized territory, or when its name is not its
-# town's.
+# A place stays a cell when its name is not its town's, unless it is a
+# municipality covering the whole subdivision; so does a CDP in unorganized
+# territory, and a municipality covering its subdivision in place_cell_states.
 kept_places <-
   fold_choice |>
+  mutate(
+    own_name = place_name != cell_name &
+      str_remove(place_name, town_centre_suffix) != cell_name,
+    whole_unit = !is_cdp & unit_share >= lift_share_min
+  ) |>
   filter(
-    is_cdp,
     !stusps %in% always_fold_states,
-    lsad %in% unorganized_lsad |
-      (place_name != cell_name &
-        str_remove(place_name, town_centre_suffix) != cell_name)
+    (is_cdp & lsad %in% unorganized_lsad) |
+      (own_name & !whole_unit) |
+      (whole_unit & stusps %in% place_cell_states)
   )
 
 folded_cell <-
@@ -322,13 +314,11 @@ folded_cell <-
   anti_join(kept_places, by = "geoid") |>
   select(geoid, cell_geoid)
 
-# every place that neither merged nor folded is a cell
 place_cells <-
   places |>
   anti_join(st_drop_geometry(merged_place_cells), by = "geoid") |>
   anti_join(folded_cell, by = "geoid")
 
-# a consolidated government's old city joins the balance cell
 stopifnot(
   all(unlist(consolidated_merges) %in% place_cells$geoid),
   !anyDuplicated(consolidated_merges$geoid),
@@ -384,7 +374,6 @@ subdivision_cells <-
   ) |>
   select(-subtracted, -area_m2, -full_m2, -width_m, -sliver)
 
-# district leftovers become one cell per county
 to_county_remainder <-
   subdivision_cells |>
   filter(
@@ -495,9 +484,7 @@ place_rows <-
   ) |>
   select(-folded_geoid, -is_cell, -merged_into)
 
-# A county subdivision with no remainder lifts into a place cell, picked by
-# residents, then area, then geoid. Split pieces already have their merged
-# place cell.
+# A county subdivision with no remainder lifts into a place cell.
 lift_area <-
   unsplit |>
   anti_join(st_drop_geometry(cells), by = "geoid") |>

@@ -222,7 +222,6 @@ points_by_cell <-
   gnis |>
   select(feature_id) |>
   inner_join(cell_points |> select(feature_id, cell_geoid), by = "feature_id")
-points_by_cell <- split(points_by_cell, points_by_cell$cell_geoid)
 
 # nearest on the sphere, as in tier 3
 sf_use_s2(TRUE)
@@ -231,12 +230,15 @@ nearest_residents <-
   st_as_sf(coords = c("lon", "lat"), crs = 4269) |> # Census points are NAD83
   st_transform(st_crs(gnis)) |>
   group_by(cell_geoid) |>
-  group_modify(\(b, key) {
-    p <- points_by_cell[[key$cell_geoid]]
-    tibble(feature_id = p$feature_id[st_nearest_feature(b, p)], pop20 = b$pop20) |>
-      count(feature_id, wt = pop20, name = "nearest_pop20")
+  group_modify(\(blocks, cell) {
+    st_join(
+      blocks,
+      points_by_cell |> semi_join(cell, by = "cell_geoid") |> select(feature_id),
+      join = st_nearest_feature
+    )
   }) |>
-  ungroup()
+  ungroup() |>
+  count(cell_geoid, feature_id, wt = pop20, name = "nearest_pop20")
 sf_use_s2(FALSE)
 
 cell_names <-
